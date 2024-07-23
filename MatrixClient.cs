@@ -76,19 +76,19 @@ public class MatrixClient {
 		apiUrlB.Path = "/_matrix/client/v3";
 
 		HttpClient client;
-		if (Logger is not null) { // FIXME
-			client = new HttpClient(new HttpLoggingHandler(Logger));
+		if (Logger is not null) {
+			client = new HttpClient(new HttpLoggingHandler(Logger, new AuthenticatedHttpClientHandler(GetAccessToken)));
 		} else {
-			client = new HttpClient();
+			client = new HttpClient(new AuthenticatedHttpClientHandler(GetAccessToken));
 		}
 		client.BaseAddress = apiUrlB.Uri;
 
 		RefitSettings = new RefitSettings {
 			ExceptionFactory = ExceptionFactory,
-			AuthorizationHeaderValueGetter = GetAccessToken // FIXME: This conflicts with having a custom handler, which is useful for logging
+			AuthorizationHeaderValueGetter = GetAccessToken
 		};
 
-		Api = RestService.For<IMatrixApi>(apiUrlB.Uri.ToString(), RefitSettings);
+		Api = RestService.For<IMatrixApi>(client, RefitSettings);
 	}
 
 	private void UpdateExpiresAt(int? expiresInMs) {
