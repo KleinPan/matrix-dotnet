@@ -27,7 +27,7 @@ public interface IMatrixApi {
 	/// <summary><see cref="Login"/></summary>
 	public abstract record LoginRequest(
 		string type,
-		Identifier identifier,
+		Identifier? identifier,
 		string? password,
 		string? token,
 		string? initial_device_display_name = null,
@@ -46,33 +46,51 @@ public interface IMatrixApi {
 
 	/// <summary><see cref="Login"/></summary>
 	public record TokenLoginRequest(
-			Identifier identifier,
 			string token,
 			string? initial_device_display_name = null,
 			string? device_id = null,
 			bool refresh_token = true
-	) : LoginRequest("m.login.token", identifier, null, token, initial_device_display_name, device_id, refresh_token);
+	) : LoginRequest("m.login.token", null, null, token, initial_device_display_name, device_id, refresh_token);
 
+	/// <summary> Perform login to receive an access and an optional refresh token.
+	/// <see href="https://spec.matrix.org/v1.11/client-server-api/#post_matrixclientv3login"/>
+	/// </summary>
 	[Post("/login")]
 	public Task<LoginResponse> Login(LoginRequest request);
 
-
+	/// <summary><see cref="Refresh"/></summary>
 	public record RefreshRequest(string refresh_token);
+	/// <summary><see cref="Refresh"/></summary>
 	public record RefreshResponse(string access_token, int? expires_in_ms, string? refresh_token);
 
+	/// <summary> Use a refresh token to reaquire a new access token </summary>
 	[Post("/refresh")]
 	public Task<RefreshResponse> Refresh(RefreshRequest request);
 
+	/// <summary><see cref="GetJoinedRooms"/></summary>
 	public record JoinedRoomsResponse(string[] joined_rooms);
 
+	/// <summary> Get a list of IDs of currently joined rooms. </summary>
 	[Get("/joined_rooms")]
 	[Headers("Authorization: Bearer")]
 	public Task<JoinedRoomsResponse> GetJoinedRooms();
 
+	/// <summary>Represents a room event</summary>
+	public abstract record Event();
+
+	/// <summary> Represents any <c>m.room.message</c> event. </summary>
+	public abstract record Message(string body, string msgtype) : Event();
+	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
+	public record TextMessage(string body) : Message(body: body, msgtype: "m.text");
+
+	/// <summary><see cref="SendEvent"/></summary>
 	public record SendEventResponse(string event_id);
 
+	/// <summary>Send a raw event to a room. Can be of any type.</summary>
+	/// <returns> The <c>event_id</c> of the sent event </returns>
+	/// <param name="body">See <see cref="Event"/></param>
 	[Put("/rooms/{roomId}/send/{eventType}/{txnId}")]
 	[Headers("Authorization: Bearer")]
-	public Task<SendEventResponse> SendEvent<T>(string roomId, string eventType, string txnId, T body);
+	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : Event;
 }
 

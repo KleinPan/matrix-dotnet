@@ -1,4 +1,17 @@
 {
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../.",
+          "files": [
+            "**/*.csproj"
+          ]
+        }
+      ],
+      "dest": "api"
+    }
+  ],
   "build": {
     "content": [
       {
@@ -8,7 +21,7 @@
         "exclude": [
           "_site/**"
         ]
-      }
+      },
     ],
     "resource": [
       {
@@ -25,6 +38,7 @@
     "globalMetadata": {
       "_appName": "matrix-dotnet",
       "_appTitle": "matrix-dotnet",
+      "_appLogoPath": "images/logo.svg",
       "_enableSearch": false,
       "pdf": false
     }
