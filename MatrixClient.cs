@@ -26,51 +26,23 @@ public class MatrixClient {
 		get => AccessToken is not null && ExpiresAt is not null && ExpiresAt < DateTime.Now;
 	}
 
-	public class LoginRequiredException : UnauthorizedAccessException { }
-
 	private async Task<string> GetAccessToken(HttpRequestMessage request, CancellationToken ct) {
 		if (!LoggedIn) throw new LoginRequiredException();
 		if (Expired) await Refresh();
 		return AccessToken!;
 	}
 
-	public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
-
-	public class ApiError : Exception {
-		public string ErrorCode { get; }
-		public string ErrorMessage { get; }
-		public HttpResponseMessage Response { get; }
-
-		public ApiError(string errorCode, string errorMessage, HttpResponseMessage response, Exception? innerException)
-			: base(String.Format("Request to Matrix API failed: {0}: {1}", errorCode, errorMessage), innerException) {
-			ErrorCode = errorCode;
-			ErrorMessage = errorMessage;
-			Response = response;
-		}
-	}
-
 	private RefitSettings RefitSettings;
-
-	private class RetryException : Exception { }
-
-	private static async Task<TResult> RetryAsync<TResult>(Func<Task<TResult>> func) {
-	retry:
-		try {
-			return await func();
-		} catch (RetryException) {
-			goto retry;
-		}
-	}
 
 	private async Task<Exception?> ExceptionFactory(HttpResponseMessage response) {
 		if (response.IsSuccessStatusCode) return null;
 
-		var errorResponse = JsonSerializer.Deserialize<ErrorResponse>(await response.Content.ReadAsStringAsync());
+		var errorResponse = JsonSerializer.Deserialize<IMatrixApi.ErrorResponse>(await response.Content.ReadAsStringAsync());
 		if (errorResponse is not null) {
 			if (errorResponse.errcode == "M_UNKNOWN_TOKEN") {
 				if (errorResponse.soft_logout is not null && errorResponse.soft_logout!.Value) {
 					await Refresh();
-					return new RetryException();
+					return new Retry.RetryException();
 				} else {
 					AccessToken = null;
 					RefreshToken = null;
@@ -79,7 +51,7 @@ public class MatrixClient {
 				}
 			}
 
-			return new ApiError(errorResponse.errcode, errorResponse.error, response, null);
+			return new MatrixApiError(errorResponse.errcode, errorResponse.error, response, null);
 		}
 
 		return await ApiException.Create(
@@ -119,6 +91,11 @@ public class MatrixClient {
 		Api = RestService.For<IMatrixApi>(apiUrlB.Uri.ToString(), RefitSettings);
 	}
 
+	private void UpdateExpiresAt(int? expiresInMs) {
+		if (expiresInMs is null) ExpiresAt = null;
+		else ExpiresAt = DateTime.Now.AddMilliseconds((double)expiresInMs);
+	}
+
 	private async Task Login(IMatrixApi.LoginRequest request) {
 		var response = await Api.Login(request);
 
@@ -127,11 +104,6 @@ public class MatrixClient {
 		UserId = response.user_id;
 		DeviceId = response.device_id;
 		UpdateExpiresAt(response.expires_in_ms);
-	}
-
-	private void UpdateExpiresAt(int? expiresInMs) {
-		if (expiresInMs is null) ExpiresAt = null;
-		else ExpiresAt = DateTime.Now.AddMilliseconds((double)expiresInMs);
 	}
 
 	public async Task PasswordLogin(string username, string password, string? initialDeviceDisplayName = null, string? deviceId = null)
@@ -157,8 +129,9 @@ public class MatrixClient {
 		UpdateExpiresAt(response.expires_in_ms);
 	}
 
+
 	public async Task<string[]> GetJoinedRooms() {
-		var response = await RetryAsync(async () => await Api.GetJoinedRooms());
+		var response = await Retry.RetryAsync(async () => await Api.GetJoinedRooms());
 
 		return response.joined_rooms;
 	}
@@ -167,7 +140,7 @@ public class MatrixClient {
 	public record TextMessage(string body) : Message(body: body, msgtype: "m.text");
 
 	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : Message {
-		var response = await RetryAsync(async () => await Api.SendEvent(roomId, "m.room.message", GenerateTransactionId(), message));
+		var response = await Retry.RetryAsync(async () => await Api.SendEvent(roomId, "m.room.message", GenerateTransactionId(), message));
 
 		return response.event_id;
 	}
