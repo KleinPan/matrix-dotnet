@@ -1,5 +1,7 @@
 namespace matrix_dotnet;
 
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Refit;
 
@@ -80,7 +82,17 @@ public interface IMatrixApi {
 	public Task<JoinedRoomsResponse> GetJoinedRooms();
 
 	/// <summary>Represents a room event content</summary>
-	public abstract record EventContent();
+	public abstract record EventContent() {
+
+		public static EventContent FromJSON(string type, JsonObject obj) {
+			EventContent? ec = type switch {
+				"m.room.message" => JsonSerializer.Deserialize<Message>(obj),
+				_ => throw new InvalidOperationException("Unknown event type")
+			};
+			if (ec is null) throw new Exception("Is borked");
+			return ec;
+		}
+	};
 
 	[JsonPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
 	[JsonDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
@@ -98,5 +110,134 @@ public interface IMatrixApi {
 	[Put("/rooms/{roomId}/send/{eventType}/{txnId}")]
 	[Headers("Authorization: Bearer")]
 	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
+
+	public record Event(
+		EventContent content,
+		string type
+	) {
+		[JsonConstructor]
+		public Event(JsonObject content, string type) : this(EventContent.FromJSON(type, content), type) {}
+	};
+
+	public record StrippedStateEvent(EventContent content, string type) : Event(content, type) {}
+	public record ClientEventWithoutRoomID(EventContent content, string type) : Event(content, type) {}
+
+/*	public record StrippedStateEvent(
+		EventContent content,
+		string sender,
+		string state_key
+	) : Event(content) {
+		[JsonConstructor]
+		public StrippedStateEvent(
+				JsonObject content,
+				string type,
+				string sender,
+				string state_key
+		) : this(EventContent.FromJSON(type, content), sender, state_key) {}
+	};
+
+	public record ClientEventWithoutRoomID(
+		EventContent content,
+		string event_id,
+		int origin_server_ts,
+		string sender,
+		string? state_key,
+		UnsignedData? unsigned
+	) : Event(content) {
+		public ClientEventWithoutRoomID(
+			JsonObject content,
+			string type,
+			string event_id,
+			int origin_server_ts,
+			string sender,
+			string? state_key,
+			UnsignedData? unsigned
+		) : this(EventContent.FromJSON(type, content), event_id, origin_server_ts, sender, state_key, unsigned) {}
+	}; */
+
+	public record UnsignedData(
+		int? age,
+		string? membership,
+		EventContent? prev_content,
+		ClientEventWithoutRoomID? redacted_because,
+		string? transaction_id
+	);
+
+	public record RoomSummary(
+		string[] heroes,
+		int invited_member_count,
+		int joined_member_count
+	) {
+		[JsonPropertyName("m.heroes")] // Why??
+		string[] heroes = heroes;
+		[JsonPropertyName("m.invited_member_count")]
+		int invited_member_count = invited_member_count;
+		[JsonPropertyName("m.joined_member_count")]
+		int joined_member_coun = joined_member_count;
+	};
+
+	public record UnreadNotificationCounts(
+		int highlight_count,
+		int notification_count
+	);
+
+	public record InvitedRoom(InviteState invite_state);
+	public record JoinedRoom(
+		AccountData account_data,
+		Ephemeral ephemeral,
+		State state,
+		RoomSummary summary,
+		Timeline timeline,
+		UnreadNotificationCounts unread_notifications,
+		Dictionary<string, UnreadNotificationCounts> unread_thread_notifications
+	);
+	public record KnockedRoom();
+	public record LeftRoom();
+
+	public record Rooms(
+		Dictionary<string, InvitedRoom> invite,
+		Dictionary<string, JoinedRoom> join,
+		Dictionary<string, KnockedRoom> knock,
+		Dictionary<string, LeftRoom> leave
+	);
+
+	public abstract record EventList<TEvent>(TEvent[] events) where TEvent : Event;
+	public record AccountData(Event[] events) : EventList<Event>(events);
+	public record Presence(Event[] events) : EventList<Event>(events);
+	public record ToDevice(Event[] events) : EventList<Event>(events);
+	public record Ephemeral(Event[] events) : EventList<Event>(events);
+	public record InviteState(StrippedStateEvent[] events) : EventList<StrippedStateEvent>(events);
+	public record State(ClientEventWithoutRoomID[] events) : EventList<ClientEventWithoutRoomID>(events);
+	public record Timeline(
+		ClientEventWithoutRoomID[] events,
+		bool limited,
+		string prev_batch
+	) : EventList<ClientEventWithoutRoomID>(events);
+	
+
+	public record SyncResponse(
+		AccountData account_data,
+		// DeviceLists device_lists, // NOT IMPLEMENTED: E2EE
+		// Dictionary<string, integer> device_one_time_keys_count, // NOT IMPLEMENTED: E2EE
+		string next_batch,
+		Presence? presence,
+		Rooms? rooms,
+		ToDevice? to_device
+	);
+
+	public enum SetPresence { offline, online, unavailable }
+
+	/// <summary> Sync events. See <see href="https://spec.matrix.org/v1.11/client-server-api/#syncing"/></summary>
+	[Get("/sync")]
+	[Headers("Authorization: Bearer")]
+	public Task<SyncResponse> Sync(
+		string? filter = null,
+		string full_state = "false", // TODO: false.ToString() == "False" and matrix doesn't like that
+		SetPresence set_presence = SetPresence.offline,
+		string? since = null,
+		int timeout = 0
+	);
+
+
 }
 
