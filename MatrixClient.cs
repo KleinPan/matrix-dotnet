@@ -103,7 +103,12 @@ public class MatrixClient {
 
 		RefitSettings = new RefitSettings {
 			ExceptionFactory = ExceptionFactory,
-			AuthorizationHeaderValueGetter = GetAccessToken
+			AuthorizationHeaderValueGetter = GetAccessToken,
+			ContentSerializer = new SystemTextJsonContentSerializer(new JsonSerializerOptions{
+					// The ObjectToInferredTypesConverter is broken and cannot be used. See https://github.com/reactiveui/refit/issues/1763
+					PropertyNameCaseInsensitive = true,
+					PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+			})
 		};
 
 		Api = RestService.For<IMatrixApi>(client, RefitSettings);

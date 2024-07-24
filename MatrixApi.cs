@@ -1,5 +1,6 @@
 namespace matrix_dotnet;
 
+using System.Text.Json.Serialization;
 using Refit;
 
 /// <summary>
@@ -8,10 +9,14 @@ using Refit;
 public interface IMatrixApi {
 	public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
 
-	public abstract record Identifier(string Type, string? User = null, string? Country = null, string? Phone = null, string? Medium = null, string? Address = null);
-	public record UserIdentifier(string user) : Identifier("m.id.user", User: user);
-	public record PhoneIdentifier(string country, string phone) : Identifier("m.id.phone", Country: country, Phone: phone);
-	public record ThirdpartyIdentifier(string medium, string address) : Identifier("m.id.thirdparty", Medium: medium, Address: address);
+	[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+	[JsonDerivedType(typeof(UserIdentifier), typeDiscriminator: "m.id.user")]
+	[JsonDerivedType(typeof(PhoneIdentifier), typeDiscriminator: "m.id.phone")]
+	[JsonDerivedType(typeof(ThirdpartyIdentifier), typeDiscriminator: "m.id.thirdparty")]
+	public abstract record Identifier();
+	public record UserIdentifier(string user) : Identifier();
+	public record PhoneIdentifier(string country, string phone) : Identifier();
+	public record ThirdpartyIdentifier(string medium, string address) : Identifier();
 
 	/// <summary>The return value of the <see cref="Login"/> function.</summary>
 	public record LoginResponse(
@@ -25,11 +30,10 @@ public interface IMatrixApi {
 	);
 
 	/// <summary><see cref="Login"/></summary>
+	[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+	[JsonDerivedType(typeof(PasswordLoginRequest), typeDiscriminator: "m.login.password")]
+	[JsonDerivedType(typeof(TokenLoginRequest), typeDiscriminator: "m.login.token")]
 	public abstract record LoginRequest(
-		string type,
-		Identifier? identifier,
-		string? password,
-		string? token,
 		string? initial_device_display_name = null,
 		string? device_id = null,
 		bool refresh_token = true
@@ -42,7 +46,7 @@ public interface IMatrixApi {
 			string? initial_device_display_name = null,
 			string? device_id = null,
 			bool refresh_token = true
-	) : LoginRequest("m.login.password", identifier, password, null, initial_device_display_name, device_id, refresh_token);
+	) : LoginRequest(initial_device_display_name, device_id, refresh_token);
 
 	/// <summary><see cref="Login"/></summary>
 	public record TokenLoginRequest(
@@ -50,7 +54,7 @@ public interface IMatrixApi {
 			string? initial_device_display_name = null,
 			string? device_id = null,
 			bool refresh_token = true
-	) : LoginRequest("m.login.token", null, null, token, initial_device_display_name, device_id, refresh_token);
+	) : LoginRequest(initial_device_display_name, device_id, refresh_token);
 
 	/// <summary> Perform login to receive an access and an optional refresh token.
 	/// <see href="https://spec.matrix.org/v1.11/client-server-api/#post_matrixclientv3login"/>
@@ -75,22 +79,24 @@ public interface IMatrixApi {
 	[Headers("Authorization: Bearer")]
 	public Task<JoinedRoomsResponse> GetJoinedRooms();
 
-	/// <summary>Represents a room event</summary>
-	public abstract record Event();
+	/// <summary>Represents a room event content</summary>
+	public abstract record EventContent();
 
+	[JsonPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
+	[JsonDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
-	public abstract record Message(string body, string msgtype) : Event();
+	public abstract record Message(string body) : EventContent();
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
-	public record TextMessage(string body) : Message(body: body, msgtype: "m.text");
+	public record TextMessage(string body) : Message(body: body);
 
 	/// <summary><see cref="SendEvent"/></summary>
 	public record SendEventResponse(string event_id);
 
 	/// <summary>Send a raw event to a room. Can be of any type.</summary>
 	/// <returns> The <c>event_id</c> of the sent event </returns>
-	/// <param name="body">See <see cref="Event"/></param>
+	/// <param name="body">See <see cref="EventContent"/></param>
 	[Put("/rooms/{roomId}/send/{eventType}/{txnId}")]
 	[Headers("Authorization: Bearer")]
-	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : Event;
+	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
 }
 
