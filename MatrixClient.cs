@@ -121,10 +121,11 @@ public class MatrixClient {
 		RefitSettings = new RefitSettings {
 			ExceptionFactory = ExceptionFactory,
 			AuthorizationHeaderValueGetter = GetAccessToken,
-			ContentSerializer = new SystemTextJsonContentSerializer(new JsonSerializerOptions{
-					// The ObjectToInferredTypesConverter is broken and cannot be used. See https://github.com/reactiveui/refit/issues/1763
-					PropertyNameCaseInsensitive = true,
-					PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+			// ContentSerializer = new NewtonsoftJsonContentSerializer()
+			ContentSerializer = new SystemTextJsonContentSerializer(new JsonSerializerOptions {
+				// The ObjectToInferredTypesConverter is broken and cannot be used. See https://github.com/reactiveui/refit/issues/1763
+				PropertyNameCaseInsensitive = true,
+				PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
 			})
 		};
 

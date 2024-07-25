@@ -83,21 +83,22 @@ public interface IMatrixApi {
 
 	/// <summary>Represents a room event content</summary>
 	public abstract record EventContent() {
-
 		public static EventContent FromJSON(string type, JsonObject obj) {
 			EventContent? ec = type switch {
 				"m.room.message" => JsonSerializer.Deserialize<Message>(obj),
-				_ => throw new InvalidOperationException("Unknown event type")
+				_ => new UnknownEvent()
 			};
-			if (ec is null) throw new Exception("Is borked");
+			if (ec is null) throw new JsonException(); // This should not happen
 			return ec;
 		}
 	};
 
+	public record UnknownEvent() : EventContent();
+
+	/// <summary> Represents any <c>m.room.message</c> event. </summary>
 	[JsonPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
 	[JsonDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
-	/// <summary> Represents any <c>m.room.message</c> event. </summary>
-	public abstract record Message(string body) : EventContent();
+	public record Message(string body) : EventContent();
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
 	public record TextMessage(string body) : Message(body: body);
 
@@ -111,70 +112,53 @@ public interface IMatrixApi {
 	[Headers("Authorization: Bearer")]
 	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
 
-	public record Event(
-		EventContent content,
-		string type
-	) {
-		[JsonConstructor]
-		public Event(JsonObject content, string type) : this(EventContent.FromJSON(type, content), type) {}
-	};
+	public record Event {
+		[JsonIgnore]
+		public EventContent content {get;}
+		[JsonPropertyName("content")]
+		public JsonObject _content {init; private get;}
+		public string type {get;}
+		
+		public Event(JsonObject _content, string type) {
+			this.content = EventContent.FromJSON(type, _content);
+			this._content = _content;
+			this.type = type;
+		}
+	}
 
-	public record StrippedStateEvent(EventContent content, string type) : Event(content, type) {}
-	public record ClientEventWithoutRoomID(EventContent content, string type) : Event(content, type) {}
-
-/*	public record StrippedStateEvent(
-		EventContent content,
+	public record StrippedStateEvent(
+		JsonObject _content,
 		string sender,
-		string state_key
-	) : Event(content) {
-		[JsonConstructor]
-		public StrippedStateEvent(
-				JsonObject content,
-				string type,
-				string sender,
-				string state_key
-		) : this(EventContent.FromJSON(type, content), sender, state_key) {}
-	};
+		string state_key,
+		string type
+	) : Event(_content, type);
 
 	public record ClientEventWithoutRoomID(
-		EventContent content,
+		JsonObject _content,
 		string event_id,
-		int origin_server_ts,
+		long origin_server_ts,
 		string sender,
 		string? state_key,
-		UnsignedData? unsigned
-	) : Event(content) {
-		public ClientEventWithoutRoomID(
-			JsonObject content,
-			string type,
-			string event_id,
-			int origin_server_ts,
-			string sender,
-			string? state_key,
-			UnsignedData? unsigned
-		) : this(EventContent.FromJSON(type, content), event_id, origin_server_ts, sender, state_key, unsigned) {}
-	}; */
+		UnsignedData? unsigned,
+		string type
+	) : Event(_content, type);
 
 	public record UnsignedData(
 		int? age,
 		string? membership,
-		EventContent? prev_content,
+		JsonObject? prev_content,
 		ClientEventWithoutRoomID? redacted_because,
 		string? transaction_id
 	);
 
 	public record RoomSummary(
+		[property: JsonPropertyName("m.heroes")] // Why??
 		string[] heroes,
+		[property: JsonPropertyName("m.invited_member_count")]
 		int invited_member_count,
+		[property: JsonPropertyName("m.joined_member_count")]
 		int joined_member_count
-	) {
-		[JsonPropertyName("m.heroes")] // Why??
-		string[] heroes = heroes;
-		[JsonPropertyName("m.invited_member_count")]
-		int invited_member_count = invited_member_count;
-		[JsonPropertyName("m.joined_member_count")]
-		int joined_member_coun = joined_member_count;
-	};
+	);
 
 	public record UnreadNotificationCounts(
 		int highlight_count,
