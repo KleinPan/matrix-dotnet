@@ -11,13 +11,21 @@ namespace matrix_dotnet;
 /// and <see cref="MatrixClient.TokenLogin"/>
 /// </summary>
 public class MatrixClient {
+	public record LoginData(
+		Uri Homeserver,
+		string? AccessToken,
+		string? RefreshToken,
+		string? UserId,
+		string? DeviceId,
+		DateTime? ExpiresAt
+	);
 	/// <summary> The base URL of the homeserver </summary>
 	public Uri Homeserver { get; private set; }
 	/// <summary> The underlying API class used to make API calls directly </summary>
 	public IMatrixApi Api { get; private set; }
 
-	private string? AccessToken;
-	private string? RefreshToken;
+	public string? AccessToken { get; private set; }
+	public string? RefreshToken { get; private set; }
 
 	/// <summary> <c>user_id</c> of the currently logged-in user. </summary>
 	public string? UserId { get; private set; }
@@ -84,6 +92,15 @@ public class MatrixClient {
 		return Guid.NewGuid().ToString();
 	}
 
+	public MatrixClient(LoginData loginData, ILogger? logger = null) : this(loginData.Homeserver, logger) {
+		Homeserver = loginData.Homeserver;
+		AccessToken = loginData.AccessToken;
+		RefreshToken = loginData.RefreshToken;
+		UserId = loginData.UserId;
+		DeviceId = loginData.DeviceId;
+		ExpiresAt = loginData.ExpiresAt;
+	}
+
 	public MatrixClient(string homeserver, ILogger? logger = null) : this(new Uri(homeserver), logger) { }
 
 	public MatrixClient(Uri homeserver, ILogger? logger = null) {
@@ -112,6 +129,10 @@ public class MatrixClient {
 		};
 
 		Api = RestService.For<IMatrixApi>(client, RefitSettings);
+	}
+
+	public LoginData ToLoginData() {
+		return new LoginData(Homeserver, AccessToken, RefreshToken, UserId, DeviceId, ExpiresAt);
 	}
 
 	private void UpdateExpiresAt(int? expiresInMs) {
