@@ -125,7 +125,10 @@ public class MatrixClient {
 			ContentSerializer = new SystemTextJsonContentSerializer(new JsonSerializerOptions {
 				// The ObjectToInferredTypesConverter is broken and cannot be used. See https://github.com/reactiveui/refit/issues/1763
 				PropertyNameCaseInsensitive = true,
-				PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+				PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+				Converters = {
+					new PolymorphicJsonConverterFactory()
+				}
 			})
 		};
 

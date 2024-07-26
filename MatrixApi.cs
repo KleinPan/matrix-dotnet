@@ -12,9 +12,9 @@ public interface IMatrixApi {
 	public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
 
 	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "type")]
-	[JsonDerivedType(typeof(UserIdentifier), typeDiscriminator: "m.id.user")]
-	[JsonDerivedType(typeof(PhoneIdentifier), typeDiscriminator: "m.id.phone")]
-	[JsonDerivedType(typeof(ThirdpartyIdentifier), typeDiscriminator: "m.id.thirdparty")]
+	[JsonNonFirstDerivedType(typeof(UserIdentifier), typeDiscriminator: "m.id.user")]
+	[JsonNonFirstDerivedType(typeof(PhoneIdentifier), typeDiscriminator: "m.id.phone")]
+	[JsonNonFirstDerivedType(typeof(ThirdpartyIdentifier), typeDiscriminator: "m.id.thirdparty")]
 	public abstract record Identifier();
 	public record UserIdentifier(string user) : Identifier();
 	public record PhoneIdentifier(string country, string phone) : Identifier();
@@ -33,8 +33,8 @@ public interface IMatrixApi {
 
 	/// <summary><see cref="Login"/></summary>
 	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "type")]
-	[JsonDerivedType(typeof(PasswordLoginRequest), typeDiscriminator: "m.login.password")]
-	[JsonDerivedType(typeof(TokenLoginRequest), typeDiscriminator: "m.login.token")]
+	[JsonNonFirstDerivedType(typeof(PasswordLoginRequest), typeDiscriminator: "m.login.password")]
+	[JsonNonFirstDerivedType(typeof(TokenLoginRequest), typeDiscriminator: "m.login.token")]
 	public abstract record LoginRequest(
 		string? initial_device_display_name = null,
 		string? device_id = null,
@@ -85,7 +85,7 @@ public interface IMatrixApi {
 	public abstract record EventContent() {
 		public static EventContent FromJSON(string type, JsonObject obj) {
 			EventContent? ec = type switch {
-				"m.room.message" => JsonSerializer.Deserialize<Message>(obj),
+				"m.room.message" => JsonSerializer.Deserialize<Message>(obj, new JsonSerializerOptions{Converters = {new PolymorphicJsonConverterFactory()}}),
 				_ => new UnknownEvent()
 			};
 			if (ec is null) throw new JsonException(); // This should not happen
@@ -97,10 +97,10 @@ public interface IMatrixApi {
 
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
 	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
-	[JsonDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
-	public record Message(string body) : EventContent();
+	[JsonNonFirstDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
+	public record Message(string body, string msgtype) : EventContent();
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
-	public record TextMessage(string body) : Message(body: body);
+	public record TextMessage(string body) : Message(body, "m.text");
 
 	/// <summary><see cref="SendEvent"/></summary>
 	public record SendEventResponse(string event_id);

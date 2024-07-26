@@ -5,12 +5,18 @@ using System.Text.Json.Serialization;
 // MODIFIED FROM https://github.com/dotnet/runtime/issues/72604#issuecomment-1932302266
 
 /// <summary>
-/// Same as <see cref="JsonDerivedTypeAttribute"/> but used for the hack below. Necessary because using the built-in
+/// Same as <see cref="JsonPolymorphicAttribute"/> but used for the hack below. Necessary because using the built-in
 /// attribute will lead to NotSupportedExceptions.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface, AllowMultiple = false, Inherited = false)]
 public class JsonNonFirstPolymorphicAttribute() : Attribute {
 	public string? TypeDiscriminatorPropertyName;
+}
+
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface, AllowMultiple = true, Inherited = false)]
+public class JsonNonFirstDerivedTypeAttribute(Type derivedType, string typeDiscriminator) : Attribute {
+	public Type DerivedType = derivedType;
+	public string TypeDiscriminator = typeDiscriminator;
 }
 
 /// <summary>
@@ -26,7 +32,7 @@ public class JsonDerivedChildAttribute(Type subtype, string discriminator, Type 
 
 public sealed class PolymorphicJsonConverterFactory : JsonConverterFactory {
 	public override bool CanConvert(Type typeToConvert) {
-		return typeToConvert.IsAbstract && typeToConvert.GetCustomAttribute<JsonNonFirstPolymorphicAttribute>() is not null;
+		return typeToConvert.GetCustomAttribute<JsonNonFirstPolymorphicAttribute>() is not null;
 	}
 
 	public override JsonConverter? CreateConverter(Type typeToConvert, JsonSerializerOptions options) {
@@ -48,7 +54,7 @@ public sealed class PolymorphicJsonConverter<T> : JsonConverter<T> {
 			typeof(T).GetCustomAttribute<JsonNonFirstPolymorphicAttribute>()?.TypeDiscriminatorPropertyName
 			?? options.PropertyNamingPolicy?.ConvertName("$type")
 			?? "$type";
-		foreach (var subtype in typeof(T).GetCustomAttributes<JsonDerivedTypeAttribute>()) {
+		foreach (var subtype in typeof(T).GetCustomAttributes<JsonNonFirstDerivedTypeAttribute>()) {
 			if (subtype.TypeDiscriminator is not string discriminator) throw new NotSupportedException("Type discriminator must be string");
 			_discriminatorToSubtype.Add(discriminator, subtype.DerivedType);
 			_subtypeToDiscriminator.Add(subtype.DerivedType, discriminator);
@@ -77,11 +83,8 @@ public sealed class PolymorphicJsonConverter<T> : JsonConverter<T> {
 		return (T)JsonSerializer.Deserialize(ref reader, type, options)!;
 	}
 
-	public override async void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options) {
+	public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options) {
 		var type = value!.GetType();
 		JsonSerializer.Serialize(writer, value, type, options);
-		if (_subtypeToDiscriminator[type] is string discriminator) {
-			writer.WriteString(_discriminatorPropName, discriminator);
-		}
 	}
 }
