@@ -11,7 +11,7 @@ using Refit;
 public interface IMatrixApi {
 	public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
 
-	[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "type")]
 	[JsonDerivedType(typeof(UserIdentifier), typeDiscriminator: "m.id.user")]
 	[JsonDerivedType(typeof(PhoneIdentifier), typeDiscriminator: "m.id.phone")]
 	[JsonDerivedType(typeof(ThirdpartyIdentifier), typeDiscriminator: "m.id.thirdparty")]
@@ -32,7 +32,7 @@ public interface IMatrixApi {
 	);
 
 	/// <summary><see cref="Login"/></summary>
-	[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "type")]
 	[JsonDerivedType(typeof(PasswordLoginRequest), typeDiscriminator: "m.login.password")]
 	[JsonDerivedType(typeof(TokenLoginRequest), typeDiscriminator: "m.login.token")]
 	public abstract record LoginRequest(
@@ -96,7 +96,7 @@ public interface IMatrixApi {
 	public record UnknownEvent() : EventContent();
 
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
-	[JsonPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
+	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
 	[JsonDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
 	public record Message(string body) : EventContent();
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
