@@ -82,23 +82,12 @@ public interface IMatrixApi {
 	public Task<JoinedRoomsResponse> GetJoinedRooms();
 
 	/// <summary>Represents a room event content</summary>
-	public abstract record EventContent() {
-		public static EventContent FromJSON(string type, JsonObject obj) {
-			EventContent? ec = type switch {
-				"m.room.message" => JsonSerializer.Deserialize<Message>(obj, new JsonSerializerOptions{Converters = {new PolymorphicJsonConverterFactory()}}),
-				_ => new UnknownEvent()
-			};
-			if (ec is null) throw new JsonException(); // This should not happen
-			return ec;
-		}
-	};
-
-	public record UnknownEvent() : EventContent();
+	public record EventContent() {};
 
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
 	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
 	[JsonNonFirstDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
-	public record Message(string body, string msgtype) : EventContent();
+	public abstract record Message(string body, string msgtype) : EventContent();
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
 	public record TextMessage(string body) : Message(body, "m.text");
 
@@ -112,41 +101,33 @@ public interface IMatrixApi {
 	[Headers("Authorization: Bearer")]
 	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
 
-	public record Event {
-		[JsonIgnore]
-		public EventContent content {get;}
-		[JsonPropertyName("content")]
-		public JsonObject _content {init; private get;}
-		public string type {get;}
-		
-		public Event(JsonObject _content, string type) {
-			this.content = EventContent.FromJSON(type, _content);
-			this._content = _content;
-			this.type = type;
-		}
-	}
+	[JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type")]
+	[JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
+	public record Event([JsonPropertyTargetProperty] EventContent content, string type);
 
 	public record StrippedStateEvent(
-		JsonObject _content,
+		[JsonPropertyTargetProperty]
+		EventContent content,
 		string sender,
 		string state_key,
 		string type
-	) : Event(_content, type);
+	) : Event(content, type);
 
 	public record ClientEventWithoutRoomID(
-		JsonObject _content,
+		[JsonPropertyTargetProperty]
+		EventContent content,
 		string event_id,
 		long origin_server_ts,
 		string sender,
 		string? state_key,
 		UnsignedData? unsigned,
 		string type
-	) : Event(_content, type);
+	) : Event(content, type);
 
 	public record UnsignedData(
 		int? age,
 		string? membership,
-		JsonObject? prev_content,
+		EventContent? prev_content,
 		ClientEventWithoutRoomID? redacted_because,
 		string? transaction_id
 	);
