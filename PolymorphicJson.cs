@@ -71,8 +71,8 @@ public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> whe
 
 	public override bool CanConvert(Type typeToConvert) => typeof(T) == typeToConvert;
 
-	protected virtual T Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
-		return (T)JsonSerializer.Deserialize(root, chosenType, options)!;
+	protected virtual object Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
+		return JsonSerializer.Deserialize(root, chosenType, options)!;
 	}
 
 	protected virtual Type GetDefaultType(Type typeToConvert) {
@@ -95,7 +95,7 @@ public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> whe
 			type = GetDefaultType(typeToConvert);
 		}
 
-		return Deserialize(root, typeToConvert, type, options);
+		return (T)Deserialize(root, typeToConvert, type, options);
 	}
 
 	public override void Write(Utf8JsonWriter writer, T? value, JsonSerializerOptions options) {
@@ -115,6 +115,10 @@ public class JsonPropertyDerivedTypeAttribute(Type derivedType, string typeDiscr
 [AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
 public class JsonPropertyTargetPropertyAttribute() : Attribute { }
 
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
+public class JsonPropertyRecursiveAttribute() : Attribute { }
+
+
 public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConverter<T, JsonPropertyPolymorphicAttribute, JsonPropertyDerivedTypeAttribute> {
 	private readonly Type _baseType;
 
@@ -128,7 +132,7 @@ public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConvert
 			return _baseType;
 		}
 
-	protected override T Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
+	protected override object Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
 		ConstructorInfo[] constructors = typeToConvert.GetConstructors();
 		if (constructors.Count() != 1) throw new MissingMethodException("Only single constructor types are supported");
 		ConstructorInfo constructor = constructors[0];
@@ -149,6 +153,8 @@ public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConvert
 				} else {
 					throw new KeyNotFoundException();
 				}
+			} else if (param.GetCustomAttribute<JsonPropertyRecursiveAttribute>() is not null) {
+				args.Add(Deserialize(jsonEl.Value, param.ParameterType, chosenType, options));
 			} else if (param.GetCustomAttribute<JsonPropertyTargetPropertyAttribute>() is not null) {
 				args.Add(JsonSerializer.Deserialize(jsonEl.Value, chosenType, options));
 			} else {
@@ -156,7 +162,7 @@ public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConvert
 			}
 
 		}
-		return (T)constructor.Invoke(args.ToArray());
+		return constructor.Invoke(args.ToArray());
 	}
 }
 

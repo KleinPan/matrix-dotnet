@@ -120,13 +120,15 @@ public interface IMatrixApi {
 		long origin_server_ts,
 		string sender,
 		string? state_key,
-		UnsignedData? unsigned, // TODO: Allow property polymorphic converter to descend into properties
+		[JsonPropertyRecursive]
+		UnsignedData? unsigned,
 		string type
 	) : Event(content, type);
 
 	public record UnsignedData(
 		int? age,
 		string? membership,
+		[JsonPropertyTargetProperty]
 		EventContent? prev_content,
 		ClientEventWithoutRoomID? redacted_because,
 		string? transaction_id
