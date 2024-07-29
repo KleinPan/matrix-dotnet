@@ -127,7 +127,7 @@ public class MatrixClient {
 				PropertyNameCaseInsensitive = true,
 				PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
 				Converters = {
-					new PolymorphicJsonConverterFactory(),
+					new PolymorphicNonFirstJsonConverterFactory(),
 					new PolymorphicPropertyJsonConverterFactory()
 				}
 			})

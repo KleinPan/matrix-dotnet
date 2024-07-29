@@ -120,7 +120,7 @@ public interface IMatrixApi {
 		long origin_server_ts,
 		string sender,
 		string? state_key,
-		UnsignedData? unsigned,
+		UnsignedData? unsigned, // TODO: Allow property polymorphic converter to descend into properties
 		string type
 	) : Event(content, type);
 
