@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Http.Logging;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace matrix_dotnet;
 
@@ -11,14 +12,6 @@ namespace matrix_dotnet;
 /// and <see cref="MatrixClient.TokenLogin"/>
 /// </summary>
 public class MatrixClient {
-	public record LoginData(
-		Uri Homeserver,
-		string? AccessToken,
-		string? RefreshToken,
-		string? UserId,
-		string? DeviceId,
-		DateTime? ExpiresAt
-	);
 	/// <summary> The base URL of the homeserver </summary>
 	public Uri Homeserver { get; private set; }
 	/// <summary> The underlying API class used to make API calls directly </summary>
@@ -41,7 +34,6 @@ public class MatrixClient {
 	public bool Expired {
 		get => AccessToken is not null && ExpiresAt is not null && ExpiresAt < DateTime.Now;
 	}
-
 
 	public ILogger? Logger;
 
@@ -126,7 +118,8 @@ public class MatrixClient {
 				Converters = {
 					new PolymorphicNonFirstJsonConverterFactory(),
 					new PolymorphicPropertyJsonConverterFactory(),
-					new MXCConverter()
+					new MXCConverter(), // It is a bummer that C# doesn't have an interface for loading structs from strings
+					new JsonStringEnumConverter()
 				}
 			})
 		};
@@ -199,4 +192,42 @@ public class MatrixClient {
 	/// <returns> The <c>event_id</c> of the sent message </returns>
 	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new IMatrixApi.TextMessage(body));
 
+	public record StateKey(string type, string state_key);
+	public class StateDict : Dictionary<StateKey, IMatrixApi.Event>;
+
+	public record EventWithState(
+		IMatrixApi.Event e,
+		IMatrixApi.RoomMember? sender
+	);
+
+	public static EventWithState[] Resolve(StateDict stateDict, IMatrixApi.Event[] events) {
+		List<EventWithState> list = new();
+		foreach (var ev in events) {
+			if (ev.IsState) {
+				stateDict[new StateKey(ev.type, ev.state_key!)] = ev;
+			}
+
+			list.Add(new EventWithState(
+				ev,
+				ev.sender is not null && stateDict.TryGetValue(new StateKey("m.room.member", ev.sender), out var sender) ? (IMatrixApi.RoomMember?)sender.content : null
+			));
+		}
+		return list.ToArray();
+	}
+
+	public async Task Sync() {
+		var response = await Retry.RetryAsync(async () => await Api.Sync());
+
+
+	}
+	
+	/// <summary> Can be serialized to JSON for persistence of login information between program runs. </summary>
+	public record struct LoginData(
+		Uri Homeserver,
+		string? AccessToken,
+		string? RefreshToken,
+		string? UserId,
+		string? DeviceId,
+		DateTime? ExpiresAt
+	);
 }

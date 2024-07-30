@@ -86,6 +86,18 @@ public interface IMatrixApi {
 	public abstract record EventContent() { };
 	public record UnknownEventContent() : EventContent() { };
 
+	public enum Membership { invite, join, knock, leave, ban };
+
+	public record RoomMember(
+		Uri? avatar_url,
+		string? displayname,
+		bool? is_direct,
+		string ?join_authorised_via_users_server,
+		Membership membership,
+		string reason,
+		JsonObject third_party_invite // NOT SUPPORTED
+	) : EventContent();
+
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
 	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype", DefaultType = typeof(UnknownMessage))]
 	[JsonNonFirstDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
@@ -128,6 +140,14 @@ public interface IMatrixApi {
 		public override string ToString() {
 			return $"mxc://{server_name}/{media_id}";
 		}
+		public MXC(string s) : this("", "") {
+			if (!s.StartsWith("mxc://")) throw new FormatException("Could not convert to MXC: doesn't start with mxc://");
+			s = s.Substring(6);
+			string[] parts = s.Split("/");
+			if (parts.Count() != 2) throw new FormatException("Could not convert to MXC: invalid url format");
+			server_name = parts[0];
+			media_id = parts[1];
+		}
 	};
 
 	/// <summary><see cref="SendEvent"/></summary>
@@ -142,7 +162,10 @@ public interface IMatrixApi {
 
 	[JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
 	[JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
-	public record Event([JsonPropertyTargetProperty] EventContent? content, string type);
+	[JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
+	public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender) {
+		public bool IsState { get { return state_key is not null; } }
+	};
 
 	public record StrippedStateEvent(
 		[JsonPropertyTargetProperty]
@@ -150,7 +173,7 @@ public interface IMatrixApi {
 		string sender,
 		string state_key,
 		string type
-	) : Event(content, type);
+	) : Event(content, type, state_key, sender);
 
 	public record ClientEvent(
 		[JsonPropertyTargetProperty]
@@ -163,7 +186,7 @@ public interface IMatrixApi {
 		[JsonPropertyRecursive]
 		UnsignedData? unsigned,
 		string type
-	) : Event(content, type);
+	) : Event(content, type, state_key, sender);
 
 	public record ClientEventWithoutRoomID(
 		[JsonPropertyTargetProperty]
@@ -210,8 +233,8 @@ public interface IMatrixApi {
 		UnreadNotificationCounts unread_notifications,
 		Dictionary<string, UnreadNotificationCounts> unread_thread_notifications
 	);
-	public record KnockedRoom();
-	public record LeftRoom();
+	public record KnockedRoom(KnockState knock_state);
+	public record LeftRoom(AccountData account_data, State state, Timeline timeline);
 
 	public record Rooms(
 		Dictionary<string, InvitedRoom> invite,
@@ -226,6 +249,7 @@ public interface IMatrixApi {
 	public record ToDevice(Event[] events) : EventList<Event>(events);
 	public record Ephemeral(Event[] events) : EventList<Event>(events);
 	public record InviteState(StrippedStateEvent[] events) : EventList<StrippedStateEvent>(events);
+	public record KnockState(StrippedStateEvent[] events) : EventList<StrippedStateEvent>(events);
 	public record State(ClientEventWithoutRoomID[] events) : EventList<ClientEventWithoutRoomID>(events);
 	public record Timeline(
 		ClientEventWithoutRoomID[] events,
