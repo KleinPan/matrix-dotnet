@@ -107,16 +107,13 @@ public class MatrixClient {
 		Homeserver = homeserver;
 		Logger = logger;
 
-		var apiUrlB = new UriBuilder(homeserver);
-		apiUrlB.Path = "/_matrix/client/v3";
-
 		HttpClient client;
 		if (Logger is not null) {
 			client = new HttpClient(new HttpLoggingHandler(Logger, new AuthenticatedHttpClientHandler(GetAccessToken)));
 		} else {
 			client = new HttpClient(new AuthenticatedHttpClientHandler(GetAccessToken));
 		}
-		client.BaseAddress = apiUrlB.Uri;
+		client.BaseAddress = Homeserver;
 
 		RefitSettings = new RefitSettings {
 			ExceptionFactory = ExceptionFactory,
@@ -128,7 +125,8 @@ public class MatrixClient {
 				PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
 				Converters = {
 					new PolymorphicNonFirstJsonConverterFactory(),
-					new PolymorphicPropertyJsonConverterFactory()
+					new PolymorphicPropertyJsonConverterFactory(),
+					new MXCConverter()
 				}
 			})
 		};

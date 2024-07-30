@@ -1,5 +1,6 @@
 namespace matrix_dotnet;
 
+using System;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -61,7 +62,7 @@ public interface IMatrixApi {
 	/// <summary> Perform login to receive an access and an optional refresh token.
 	/// <see href="https://spec.matrix.org/v1.11/client-server-api/#post_matrixclientv3login"/>
 	/// </summary>
-	[Post("/login")]
+	[Post("/_matrix/client/v3/login")]
 	public Task<LoginResponse> Login(LoginRequest request);
 
 	/// <summary><see cref="Refresh"/></summary>
@@ -70,26 +71,64 @@ public interface IMatrixApi {
 	public record RefreshResponse(string access_token, int? expires_in_ms, string? refresh_token);
 
 	/// <summary> Use a refresh token to reaquire a new access token </summary>
-	[Post("/refresh")]
+	[Post("/_matrix/client/v3/refresh")]
 	public Task<RefreshResponse> Refresh(RefreshRequest request);
 
 	/// <summary><see cref="GetJoinedRooms"/></summary>
 	public record JoinedRoomsResponse(string[] joined_rooms);
 
 	/// <summary> Get a list of IDs of currently joined rooms. </summary>
-	[Get("/joined_rooms")]
+	[Get("/_matrix/client/v3/joined_rooms")]
 	[Headers("Authorization: Bearer")]
 	public Task<JoinedRoomsResponse> GetJoinedRooms();
 
 	/// <summary>Represents a room event content</summary>
-	public record EventContent() {};
+	public abstract record EventContent() { };
+	public record UnknownEventContent() : EventContent() { };
 
 	/// <summary> Represents any <c>m.room.message</c> event. </summary>
-	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype")]
+	[JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype", DefaultType = typeof(UnknownMessage))]
 	[JsonNonFirstDerivedType(typeof(TextMessage), typeDiscriminator: "m.text")]
+	[JsonNonFirstDerivedType(typeof(ImageMessage), typeDiscriminator: "m.image")]
 	public abstract record Message(string body, string msgtype) : EventContent();
+	/// <summary> Represents a message with an unknown type. </summary>
+	public record UnknownMessage(string body, string msgtype) : Message(body, msgtype);
 	/// <summary> Represents a basic <c>msgtype: m.text</c> message. </summary>
 	public record TextMessage(string body) : Message(body, "m.text");
+	/// <summary> Represents an image in a <c>msgtype: m.image</c> message. </summary>
+	public record ImageMessage(
+		string body,
+		// EncryptedFile file, // NOT IMPLEMENTED: E2EE
+		string? filename,
+		ImageInfo info,
+		MXC url
+	) : Message(body, "m.image");
+
+	public record ImageInfo(
+		int h,
+		string mimetype,
+		int size,
+		int w,
+		// EncryptedFile thumbnail_file // NOT IMPLEMENTED: E2EE
+		ThumbnailInfo? thumbnail_info,
+		MXC? thumbnail_url
+	) : ThumbnailInfo(h, mimetype, size, w);
+
+	public record ThumbnailInfo(
+		int h,
+		string mimetype,
+		int size,
+		int w
+	);
+
+	public record struct MXC(
+		string server_name,
+		string media_id
+	) {
+		public override string ToString() {
+			return $"mxc://{server_name}/{media_id}";
+		}
+	};
 
 	/// <summary><see cref="SendEvent"/></summary>
 	public record SendEventResponse(string event_id);
@@ -97,27 +136,28 @@ public interface IMatrixApi {
 	/// <summary>Send a raw event to a room. Can be of any type.</summary>
 	/// <returns> The <c>event_id</c> of the sent event </returns>
 	/// <param name="body">See <see cref="EventContent"/></param>
-	[Put("/rooms/{roomId}/send/{eventType}/{txnId}")]
+	[Put("/_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}")]
 	[Headers("Authorization: Bearer")]
 	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
 
-	[JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type")]
+	[JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
 	[JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
-	public record Event([JsonPropertyTargetProperty] EventContent content, string type);
+	public record Event([JsonPropertyTargetProperty] EventContent? content, string type);
 
 	public record StrippedStateEvent(
 		[JsonPropertyTargetProperty]
-		EventContent content,
+		EventContent? content, // Redacted events have no content
 		string sender,
 		string state_key,
 		string type
 	) : Event(content, type);
 
-	public record ClientEventWithoutRoomID(
+	public record ClientEvent(
 		[JsonPropertyTargetProperty]
-		EventContent content,
+		EventContent? content,
 		string event_id,
 		long origin_server_ts,
+		string? room_id,
 		string sender,
 		string? state_key,
 		[JsonPropertyRecursive]
@@ -125,12 +165,24 @@ public interface IMatrixApi {
 		string type
 	) : Event(content, type);
 
+	public record ClientEventWithoutRoomID(
+		[JsonPropertyTargetProperty]
+		EventContent? content,
+		string event_id,
+		long origin_server_ts,
+		string sender,
+		string? state_key,
+		[JsonPropertyRecursive]
+		UnsignedData? unsigned,
+		string type
+	) : ClientEvent(content, event_id, origin_server_ts, null, sender, state_key, unsigned, type);
+
 	public record UnsignedData(
 		int? age,
 		string? membership,
 		[JsonPropertyTargetProperty]
 		EventContent? prev_content,
-		ClientEventWithoutRoomID? redacted_because,
+		ClientEvent? redacted_because,
 		string? transaction_id
 	);
 
@@ -180,7 +232,7 @@ public interface IMatrixApi {
 		bool limited,
 		string prev_batch
 	) : EventList<ClientEventWithoutRoomID>(events);
-	
+
 
 	public record SyncResponse(
 		AccountData account_data,
@@ -195,7 +247,7 @@ public interface IMatrixApi {
 	public enum SetPresence { offline, online, unavailable }
 
 	/// <summary> Sync events. See <see href="https://spec.matrix.org/v1.11/client-server-api/#syncing"/></summary>
-	[Get("/sync")]
+	[Get("/_matrix/client/v3/sync")]
 	[Headers("Authorization: Bearer")]
 	public Task<SyncResponse> Sync(
 		string? filter = null,
@@ -205,6 +257,32 @@ public interface IMatrixApi {
 		int timeout = 0
 	);
 
+	public enum Dir { f, b };
 
+	public record RoomMessagesResponse(
+		ClientEvent[] chunk,
+		string? end,
+		string start,
+		ClientEvent[]? state
+	);
+
+	/// <summary> Get messages for particular room. See <see href="https://spec.matrix.org/v1.11/client-server-api/#syncing"/> and <see href="https://spec.matrix.org/v1.11/client-server-api/#get_matrixclientv3roomsroomidmessages"/></summary>
+	[Get("/_matrix/client/v3/rooms/{roomId}/messages")]
+	[Headers("Authorization: Bearer")]
+	public Task<RoomMessagesResponse> GetRoomMessages(
+		string roomId,
+		Dir dir,
+		string? filter = null,
+		string? from = null,
+		int? limit = null,
+		string? to = null
+	);
+
+	[Get("/_matrix/media/v3/download/{serverName}/{mediaId}")]
+	public Task<Stream> OldDownloadMedia(string serverName, string mediaId, int? timeout_ms = null);
+
+	[Get("/_matrix/client/v1/media/download/{serverName}/{mediaId}")]
+	public Task<Stream> DownloadMedia(string serverName, string mediaId, int? timeout_ms = null);
 }
+
 

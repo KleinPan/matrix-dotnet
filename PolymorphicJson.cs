@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 // Heavily modified from https://github.com/dotnet/runtime/issues/72604#issuecomment-1932302266
@@ -7,6 +8,7 @@ using System.Text.Json.Serialization;
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface, AllowMultiple = false, Inherited = false)]
 public abstract class JsonAbstractPolymorphicAttribute() : Attribute {
 	public string? TypeDiscriminatorPropertyName;
+	public Type? DefaultType;
 }
 
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Interface, AllowMultiple = true, Inherited = false)]
@@ -53,6 +55,8 @@ public class PolymorphicNonFirstJsonConverter<T>(JsonSerializerOptions options, 
 
 public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> where TAttr : JsonAbstractPolymorphicAttribute where TDerAttr : JsonAbstractDerivedTypeAttribute {
 	protected readonly string _discriminatorPropName;
+	protected readonly Type? _defaultType;
+
 	protected readonly Dictionary<string, Type> _discriminatorToSubtype = [];
 
 	public PolymorphicJsonConverter(JsonSerializerOptions options, Dictionary<string, Type>? additionalDerivedTypes = null) {
@@ -62,6 +66,7 @@ public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> whe
 			attr.TypeDiscriminatorPropertyName
 			?? options.PropertyNamingPolicy?.ConvertName("$type")
 			?? "$type";
+		_defaultType = attr.DefaultType;
 		if (additionalDerivedTypes is not null) _discriminatorToSubtype = additionalDerivedTypes;
 		foreach (var subtype in typeof(T).GetCustomAttributes<TDerAttr>()) {
 			if (subtype.TypeDiscriminator is not string discriminator) throw new NotSupportedException("Type discriminator must be string");
@@ -73,10 +78,6 @@ public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> whe
 
 	protected virtual object Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
 		return JsonSerializer.Deserialize(root, chosenType, options)!;
-	}
-
-	protected virtual Type GetDefaultType(Type typeToConvert) {
-		return typeToConvert;
 	}
 
 	public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) {
@@ -92,7 +93,11 @@ public class PolymorphicJsonConverter<T, TAttr, TDerAttr> : JsonConverter<T> whe
 		}
 
 		if (!_discriminatorToSubtype.TryGetValue(typeName, out var type)) {
-			type = GetDefaultType(typeToConvert);
+			if (_defaultType is not null) {
+				type = _defaultType;
+			} else {
+				throw new JsonException($"Unknown type: {typeName}");
+			}
 		}
 
 		return (T)Deserialize(root, typeToConvert, type, options);
@@ -128,10 +133,6 @@ public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConvert
 		_baseType = attr.BaseType;
 	}
 
-	protected override Type GetDefaultType(Type typeToConvert) {
-			return _baseType;
-		}
-
 	protected override object Deserialize(JsonElement root, Type typeToConvert, Type chosenType, JsonSerializerOptions options) {
 		ConstructorInfo[] constructors = typeToConvert.GetConstructors();
 		if (constructors.Count() != 1) throw new MissingMethodException("Only single constructor types are supported");
@@ -147,6 +148,8 @@ public sealed class PolymorphicPropertyJsonConverter<T> : PolymorphicJsonConvert
 			try {
 				jsonEl = root.GetProperty(jsonName);
 			} catch (KeyNotFoundException) { }
+			// Fallback empty objects to null so we don't parse them and miss a type discriminator.
+			if (jsonEl is not null && jsonEl.Value.ValueKind == JsonValueKind.Object && jsonEl.Value.EnumerateObject().Count() == 0) jsonEl = null;
 			if (jsonEl is null) {
 				if (param.IsNullable()) {
 					args.Add(null);

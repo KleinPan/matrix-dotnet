@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 public class HttpLoggingHandler : DelegatingHandler {
 	ILogger Logger;
-	public HttpLoggingHandler(ILogger logger, HttpMessageHandler innerHandler = null)
+	public HttpLoggingHandler(ILogger logger, HttpMessageHandler? innerHandler = null)
 		: base(innerHandler ?? new HttpClientHandler()) {
 			Logger = logger;
 	}
@@ -19,8 +19,8 @@ public class HttpLoggingHandler : DelegatingHandler {
 
 		var sb = new StringBuilder();
 
-		sb.AppendLine($"{req.Method} {req.RequestUri.PathAndQuery} {req.RequestUri.Scheme}/{req.Version}");
-		sb.AppendLine($"Host: {req.RequestUri.Scheme}://{req.RequestUri.Host}");
+		sb.AppendLine($"{req.Method} {req.RequestUri?.PathAndQuery} {req.RequestUri?.Scheme}/{req.Version}");
+		sb.AppendLine($"Host: {req.RequestUri?.Scheme}://{req.RequestUri?.Host}");
 
 		if (req.Headers.Count() > 0)
 			sb.AppendLine($"Headers:\n{req.Headers}");
@@ -54,7 +54,7 @@ public class HttpLoggingHandler : DelegatingHandler {
 
 		var resp = response;
 
-		sb.AppendLine($"{req.RequestUri.Scheme.ToUpper()}/{resp.Version} {(int)resp.StatusCode} {resp.ReasonPhrase}");
+		sb.AppendLine($"{req.RequestUri?.Scheme.ToUpper()}/{resp.Version} {(int)resp.StatusCode} {resp.ReasonPhrase}");
 
 		// foreach (var header in resp.Headers)
 		// 	sb.AppendLine($" {header.Key}: {string.Join(", ", header.Value)}");
@@ -90,7 +90,7 @@ public class HttpLoggingHandler : DelegatingHandler {
 	readonly string[] types = new[] { "html", "text", "xml", "json", "txt", "x-www-form-urlencoded" };
 
 	bool IsTextBasedContentType(HttpHeaders headers) {
-		IEnumerable<string> values;
+		IEnumerable<string>? values;
 		if (!headers.TryGetValues("Content-Type", out values))
 			return false;
 		var header = string.Join(" ", values).ToLowerInvariant();
