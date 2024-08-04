@@ -16,10 +16,10 @@ public interface IMatrixApi {
 	[JsonNonFirstDerivedType(typeof(UserIdentifier), typeDiscriminator: "m.id.user")]
 	[JsonNonFirstDerivedType(typeof(PhoneIdentifier), typeDiscriminator: "m.id.phone")]
 	[JsonNonFirstDerivedType(typeof(ThirdpartyIdentifier), typeDiscriminator: "m.id.thirdparty")]
-	public abstract record Identifier();
-	public record UserIdentifier(string user) : Identifier();
-	public record PhoneIdentifier(string country, string phone) : Identifier();
-	public record ThirdpartyIdentifier(string medium, string address) : Identifier();
+	public abstract record Identifier(string type);
+	public record UserIdentifier(string user) : Identifier("m.id.user");
+	public record PhoneIdentifier(string country, string phone) : Identifier("m.id.phone");
+	public record ThirdpartyIdentifier(string medium, string address) : Identifier("m.id.thirdparty");
 
 	/// <summary>The return value of the <see cref="Login"/> function.</summary>
 	public record LoginResponse(
@@ -37,6 +37,7 @@ public interface IMatrixApi {
 	[JsonNonFirstDerivedType(typeof(PasswordLoginRequest), typeDiscriminator: "m.login.password")]
 	[JsonNonFirstDerivedType(typeof(TokenLoginRequest), typeDiscriminator: "m.login.token")]
 	public abstract record LoginRequest(
+		string type,
 		string? initial_device_display_name = null,
 		string? device_id = null,
 		bool refresh_token = true
@@ -49,7 +50,7 @@ public interface IMatrixApi {
 			string? initial_device_display_name = null,
 			string? device_id = null,
 			bool refresh_token = true
-	) : LoginRequest(initial_device_display_name, device_id, refresh_token);
+	) : LoginRequest("m.login.password", initial_device_display_name, device_id, refresh_token);
 
 	/// <summary><see cref="Login"/></summary>
 	public record TokenLoginRequest(
@@ -57,7 +58,7 @@ public interface IMatrixApi {
 			string? initial_device_display_name = null,
 			string? device_id = null,
 			bool refresh_token = true
-	) : LoginRequest(initial_device_display_name, device_id, refresh_token);
+	) : LoginRequest("m.login.token", initial_device_display_name, device_id, refresh_token);
 
 	/// <summary> Perform login to receive an access and an optional refresh token.
 	/// <see href="https://spec.matrix.org/v1.11/client-server-api/#post_matrixclientv3login"/>
@@ -231,16 +232,16 @@ public interface IMatrixApi {
 		RoomSummary summary,
 		Timeline timeline,
 		UnreadNotificationCounts unread_notifications,
-		Dictionary<string, UnreadNotificationCounts> unread_thread_notifications
+		Dictionary<string, UnreadNotificationCounts>? unread_thread_notifications
 	);
 	public record KnockedRoom(KnockState knock_state);
 	public record LeftRoom(AccountData account_data, State state, Timeline timeline);
 
 	public record Rooms(
-		Dictionary<string, InvitedRoom> invite,
-		Dictionary<string, JoinedRoom> join,
-		Dictionary<string, KnockedRoom> knock,
-		Dictionary<string, LeftRoom> leave
+		Dictionary<string, InvitedRoom>? invite,
+		Dictionary<string, JoinedRoom>? join,
+		Dictionary<string, KnockedRoom>? knock,
+		Dictionary<string, LeftRoom>? leave
 	);
 
 	public abstract record EventList<TEvent>(TEvent[] events) where TEvent : Event;

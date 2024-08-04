@@ -3,8 +3,12 @@ using Microsoft.Extensions.Http.Logging;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.Immutable;
 
 namespace matrix_dotnet;
+
+using StateDict = ImmutableDictionary<StateKey, IMatrixApi.Event>;
+public record StateKey(string type, string state_key);
 
 /// <summary>
 /// The main client class for interacting with Matrix. Most operations
@@ -192,35 +196,282 @@ public class MatrixClient {
 	/// <returns> The <c>event_id</c> of the sent message </returns>
 	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new IMatrixApi.TextMessage(body));
 
-	public record StateKey(string type, string state_key);
-	public class StateDict : Dictionary<StateKey, IMatrixApi.Event>;
-
 	public record EventWithState(
-		IMatrixApi.Event e,
-		IMatrixApi.RoomMember? sender
-	);
+		IMatrixApi.Event Event,
+		StateDict State
+	) {
+		public IMatrixApi.RoomMember? GetSender() {
+			if (Event.sender is null || !State.TryGetValue(new StateKey("m.room.member", Event.sender), out var member)) return null;
+			return (IMatrixApi.RoomMember?)member.content;
+		}
+	};
 
-	public static EventWithState[] Resolve(StateDict stateDict, IMatrixApi.Event[] events) {
+	public static EventWithState[] Resolve(IMatrixApi.Event[] events, StateDict? stateDict = null) {
+		if (stateDict is null) stateDict = StateDict.Empty;
 		List<EventWithState> list = new();
 		foreach (var ev in events) {
 			if (ev.IsState) {
-				stateDict[new StateKey(ev.type, ev.state_key!)] = ev;
+				stateDict = stateDict.SetItem(new StateKey(ev.type, ev.state_key!), ev);
 			}
 
 			list.Add(new EventWithState(
 				ev,
-				ev.sender is not null && stateDict.TryGetValue(new StateKey("m.room.member", ev.sender), out var sender) ? (IMatrixApi.RoomMember?)sender.content : null
+				stateDict
 			));
 		}
 		return list.ToArray();
 	}
 
-	public async Task Sync() {
-		var response = await Retry.RetryAsync(async () => await Api.Sync());
+	public StateDict? PresenceState { get; private set; }
 
+	public Dictionary<string, StateDict> InvitiedState { get; private set; } = new();
+	public Dictionary<string, StateDict> KnockState { get; private set; } = new();
+	private record TimelinePoint(
+		EventWithState? Event,
+		string? From,
+		string? To
+	) {
+		public bool IsHole => Event is null;
+	};
+
+	private class TimelineEvent : ITimelineEvent {
+		public EventWithState Event { get; private set; }
+		private MatrixClient Client;
+		private string RoomId;
+
+		private LinkedListNode<TimelinePoint> Node;
+		public TimelineEvent(LinkedListNode<TimelinePoint> node, MatrixClient client, string roomId) {
+			if (node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
+			if (node.List is null) throw new ArgumentNullException("TimelineEvent instantiated with orphan node");
+			Event = node.Value.Event;
+			Node = node;
+			Client = client;
+			RoomId = roomId;
+		}
+
+		public async Task<ITimelineEvent?> Next() {
+			if (Node.Next is null) return null;
+			if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
+
+			var hole = Node.Next.Value;
+			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.f, from: hole.From, to: hole.To));
+
+			var state = Event.State;
+			if (response.state is not null)
+				state = Resolve(response.state, state).LastOrDefault()?.State;
+
+			var newMessages = Resolve(response.chunk, state);
+
+			Node.List!.Remove(Node.Next);
+
+			foreach (var message in newMessages.Reverse()) {
+				Node.List.AddAfter(Node, new TimelinePoint(message, null, null));
+			}
+
+			if (response.end is not null)
+				Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
+
+			if (newMessages.Count() == 0) return null;
+
+			return new TimelineEvent(Node.Next, Client, RoomId);
+		}
+
+		public async Task<ITimelineEvent?> Previous() {
+			if (Node.Previous is null) return null;
+			if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
+
+			var hole = Node.Previous.Value;
+			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.b, from: hole.From, to: hole.To));
+
+			var state = Event.State;
+			if (response.state is not null)
+				state = Resolve(response.state, state).LastOrDefault()?.State;
+
+			var newMessages = Resolve(response.chunk, state);
+
+			Node.List!.Remove(Node.Previous);
+
+			foreach (var message in newMessages.Reverse()) {
+				Node.List.AddBefore(Node, new TimelinePoint(message, null, null));
+			}
+
+			if (response.end is not null)
+				Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
+
+			if (newMessages.Count() == 0) return null;
+
+			return new TimelineEvent(Node.Previous, Client, RoomId);
+		}
+
+	};
+	public interface ITimelineEvent {
+		public EventWithState Event { get; }
+		public Task<ITimelineEvent?> Next();
+		public Task<ITimelineEvent?> Previous();
+		public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
+			ITimelineEvent? current = this;
+			do {
+				yield return current;
+				current = await current.Next();
+			} while (current is not null);
+		}
+		public async IAsyncEnumerable<ITimelineEvent> EnumerateBackward() {
+			ITimelineEvent? current = this;
+			do {
+				yield return current;
+				current = await current.Previous();
+			} while (current is not null);
+		}
+	}
+
+	public class Timeline {
+		private LinkedList<TimelinePoint> EventList = new();
+
+		private MatrixClient Client;
+		private string RoomId;
+
+		public ITimelineEvent? First {
+			get {
+				LinkedListNode<TimelinePoint>? node = EventList.First;
+				if (node is null) return null;
+				while (node.Value.Event is null) {
+					node = node.Next;
+					if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
+				}
+				return new TimelineEvent(node, Client, RoomId);
+			}
+		}
+
+		public ITimelineEvent? Last {
+			get {
+				LinkedListNode<TimelinePoint>? node = EventList.Last;
+				if (node is null) return null;
+				while (node.Value.Event is null) {
+					node = node.Previous;
+					if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
+				}
+				return new TimelineEvent(node, Client, RoomId);
+			}
+		}
+
+		public void Sync(IMatrixApi.Timeline timeline, StateDict? state, bool isGapped) {
+			if (isGapped) {
+				if (EventList.Last is not null && EventList.Last.Value.IsHole) {
+					EventList.Last.Value = new TimelinePoint(null, EventList.Last.Value.From, timeline.prev_batch);
+				} else {
+					EventList.AddLast(new TimelinePoint(null, null, timeline.prev_batch));
+				}
+			}
+
+			var resolvedEvents = MatrixClient.Resolve(timeline.events, state);
+
+			foreach (var ev in resolvedEvents) {
+				EventList.AddLast(new TimelinePoint(ev, null, null));
+			}
+		}
+		
+		public Timeline(MatrixClient client, string roomId) {
+			Client = client;
+			RoomId = roomId;
+		}
 
 	}
-	
+
+	public record JoinedRoom(
+		StateDict account_data,
+		StateDict ephemeral,
+		StateDict state,
+		IMatrixApi.RoomSummary summary,
+		Timeline timeline,
+		IMatrixApi.UnreadNotificationCounts unread_notifications,
+		Dictionary<string, IMatrixApi.UnreadNotificationCounts> unread_thread_notifications
+	);
+	public Dictionary<string, JoinedRoom> JoinedRooms { get; private set; } = new();
+
+	public string? NextBatch {get; private set;}
+
+	private async Task SyncUnsafe(int timeout) {
+		var response = await Retry.RetryAsync(async () => await Api.Sync(timeout: timeout, since: NextBatch));
+
+		string original_batch = NextBatch;
+		NextBatch = response.next_batch;
+
+		if (response.presence is not null)
+			PresenceState = Resolve(response.presence.events, PresenceState).Last().State;
+
+		if (response.rooms is not null) {
+			if (response.rooms.invite is not null)
+				foreach (var invitedRoom in response.rooms.invite) {
+					StateDict? state = null;
+					InvitiedState.TryGetValue(invitedRoom.Key, out state);
+					StateDict? resolvedState = Resolve(invitedRoom.Value.invite_state.events, state).LastOrDefault()?.State;
+					if (resolvedState is not null)
+						InvitiedState[invitedRoom.Key] = resolvedState;
+				}
+			if (response.rooms.knock is not null)
+				foreach (var knockedRoom in response.rooms.knock) {
+					StateDict? state = null;
+					KnockState.TryGetValue(knockedRoom.Key, out state);
+					StateDict? resolvedState = Resolve(knockedRoom.Value.knock_state.events, state).LastOrDefault()?.State;
+					if (resolvedState is not null)
+						KnockState[knockedRoom.Key] = resolvedState;
+				}
+			if (response.rooms.join is not null)
+				foreach (var joinedRoom in response.rooms.join) {
+					string id = joinedRoom.Key;
+					var roomResponse = joinedRoom.Value;
+					JoinedRoom? room = null;
+					JoinedRooms.TryGetValue(id, out room);
+
+					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).LastOrDefault()?.State;
+					StateDict? ephemeral = Resolve(roomResponse.ephemeral.events, room?.ephemeral).LastOrDefault()?.State;
+					StateDict? state = Resolve(roomResponse.state.events, room?.state).LastOrDefault()?.State;
+					IMatrixApi.RoomSummary summary = roomResponse.summary;
+					Timeline timeline = room?.timeline ?? new Timeline(this, id);
+					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
+					state = timeline.Last?.Event.State;
+					IMatrixApi.UnreadNotificationCounts unread_notifications = roomResponse.unread_notifications;
+					Dictionary<string, IMatrixApi.UnreadNotificationCounts> unread_thread_notifications = room?.unread_thread_notifications ?? new();
+					if (roomResponse.unread_thread_notifications is not null)
+						foreach (var kv in roomResponse.unread_thread_notifications) unread_thread_notifications[kv.Key] = kv.Value;
+
+					JoinedRooms[id] = new JoinedRoom(
+						account_data ?? StateDict.Empty,
+						ephemeral ?? StateDict.Empty,
+						state ?? StateDict.Empty,
+						summary,
+						timeline,
+						unread_notifications,
+						unread_thread_notifications
+					);
+				}
+			// TODO: left rooms
+		}
+
+	}
+
+	private bool Syncing = false;
+	private object SyncLock = new();
+
+	public async Task Sync(int timeout = 0) {
+		lock (SyncLock) {
+			if (Syncing) {
+				// Another sync is happening, return after it is done.
+				while (Syncing) Monitor.Wait(SyncLock);
+				return;
+			} else {
+				Syncing = true;
+			}
+		}
+
+		await SyncUnsafe(timeout);
+
+		lock (SyncLock) {
+			Syncing = false;
+		}
+
+	}
+
 	/// <summary> Can be serialized to JSON for persistence of login information between program runs. </summary>
 	public record struct LoginData(
 		Uri Homeserver,
