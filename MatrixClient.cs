@@ -7,7 +7,7 @@ using System.Collections.Immutable;
 
 namespace matrix_dotnet;
 
-using StateDict = ImmutableDictionary<StateKey, IMatrixApi.Event>;
+using StateDict = ImmutableDictionary<StateKey, IMatrixApi.EventContent>;
 public record StateKey(string type, string state_key);
 
 /// <summary>
@@ -202,16 +202,23 @@ public class MatrixClient {
 	) {
 		public IMatrixApi.RoomMember? GetSender() {
 			if (Event.sender is null || !State.TryGetValue(new StateKey("m.room.member", Event.sender), out var member)) return null;
-			return (IMatrixApi.RoomMember?)member.content;
+			return (IMatrixApi.RoomMember?)member;
 		}
 	};
 
-	public static EventWithState[] Resolve(IMatrixApi.Event[] events, StateDict? stateDict = null) {
+	public static EventWithState[] Resolve(IEnumerable<IMatrixApi.Event> events, StateDict? stateDict = null, bool rewind = false) {
 		if (stateDict is null) stateDict = StateDict.Empty;
 		List<EventWithState> list = new();
 		foreach (var ev in events) {
 			if (ev.IsState) {
-				stateDict = stateDict.SetItem(new StateKey(ev.type, ev.state_key!), ev);
+				var key = new StateKey(ev.type, ev.state_key!);
+				if (rewind) {
+					if (ev is not IMatrixApi.ClientEvent clientEvent) throw new InvalidOperationException("Cannot backwards resolve with stripped state");
+					if (clientEvent.unsigned is null || clientEvent.unsigned.prev_content is null) stateDict = stateDict.Remove(key);
+					else stateDict = stateDict.SetItem(key, clientEvent.unsigned.prev_content);
+				} else {
+					stateDict = stateDict.SetItem(key, ev.content!);
+				}
 			}
 
 			list.Add(new EventWithState(
@@ -256,6 +263,7 @@ public class MatrixClient {
 			var hole = Node.Next.Value;
 			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.f, from: hole.From, to: hole.To));
 
+
 			var state = Event.State;
 			if (response.state is not null)
 				state = Resolve(response.state, state).LastOrDefault()?.State;
@@ -264,12 +272,12 @@ public class MatrixClient {
 
 			Node.List!.Remove(Node.Next);
 
+			if (response.end is not null)
+				Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
+
 			foreach (var message in newMessages.Reverse()) {
 				Node.List.AddAfter(Node, new TimelinePoint(message, null, null));
 			}
-
-			if (response.end is not null)
-				Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
 
 			if (newMessages.Count() == 0) return null;
 
@@ -281,22 +289,22 @@ public class MatrixClient {
 			if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
 
 			var hole = Node.Previous.Value;
-			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.b, from: hole.From, to: hole.To));
+			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.b, from: hole.To, to: hole.From));
 
 			var state = Event.State;
 			if (response.state is not null)
 				state = Resolve(response.state, state).LastOrDefault()?.State;
 
-			var newMessages = Resolve(response.chunk, state);
+			var newMessages = Resolve(response.chunk, state, rewind: true);
 
 			Node.List!.Remove(Node.Previous);
+
+			if (response.end is not null)
+				Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
 
 			foreach (var message in newMessages.Reverse()) {
 				Node.List.AddBefore(Node, new TimelinePoint(message, null, null));
 			}
-
-			if (response.end is not null)
-				Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
 
 			if (newMessages.Count() == 0) return null;
 
@@ -325,6 +333,7 @@ public class MatrixClient {
 	}
 
 	public class Timeline {
+		// TODO: lock linked list
 		private LinkedList<TimelinePoint> EventList = new();
 
 		private MatrixClient Client;
@@ -369,7 +378,7 @@ public class MatrixClient {
 				EventList.AddLast(new TimelinePoint(ev, null, null));
 			}
 		}
-		
+
 		public Timeline(MatrixClient client, string roomId) {
 			Client = client;
 			RoomId = roomId;
@@ -388,7 +397,7 @@ public class MatrixClient {
 	);
 	public Dictionary<string, JoinedRoom> JoinedRooms { get; private set; } = new();
 
-	public string? NextBatch {get; private set;}
+	public string? NextBatch { get; private set; }
 
 	private async Task SyncUnsafe(int timeout) {
 		var response = await Retry.RetryAsync(async () => await Api.Sync(timeout: timeout, since: NextBatch));
