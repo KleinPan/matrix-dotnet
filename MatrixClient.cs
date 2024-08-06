@@ -5,10 +5,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Immutable;
 
-namespace matrix_dotnet;
+namespace matrix_dotnet.Client;
 
-using StateDict = ImmutableDictionary<StateKey, IMatrixApi.EventContent>;
-public record StateKey(string type, string state_key);
+using StateDict = ImmutableDictionary<StateKey, Api.EventContent>;
 
 /// <summary>
 /// The main client class for interacting with Matrix. Most operations
@@ -19,7 +18,7 @@ public class MatrixClient {
 	/// <summary> The base URL of the homeserver </summary>
 	public Uri Homeserver { get; private set; }
 	/// <summary> The underlying API class used to make API calls directly </summary>
-	public IMatrixApi Api { get; private set; }
+	public Api.IMatrixApi ApiClient { get; private set; }
 
 	public string? AccessToken { get; private set; }
 	public string? RefreshToken { get; private set; }
@@ -59,7 +58,7 @@ public class MatrixClient {
 	private async Task<Exception?> ExceptionFactory(HttpResponseMessage response) {
 		if (response.IsSuccessStatusCode) return null;
 
-		var errorResponse = JsonSerializer.Deserialize<IMatrixApi.ErrorResponse>(await response.Content.ReadAsStringAsync());
+		var errorResponse = JsonSerializer.Deserialize<Api.ErrorResponse>(await response.Content.ReadAsStringAsync());
 		if (errorResponse is not null) {
 			if (errorResponse.errcode == "M_UNKNOWN_TOKEN") {
 				if (errorResponse.soft_logout is not null && errorResponse.soft_logout!.Value) {
@@ -128,7 +127,7 @@ public class MatrixClient {
 			})
 		};
 
-		Api = RestService.For<IMatrixApi>(client, RefitSettings);
+		ApiClient = RestService.For<Api.IMatrixApi>(client, RefitSettings);
 	}
 
 	public LoginData ToLoginData() {
@@ -140,8 +139,8 @@ public class MatrixClient {
 		else ExpiresAt = DateTime.Now.AddMilliseconds((double)expiresInMs);
 	}
 
-	private async Task Login(IMatrixApi.LoginRequest request) {
-		var response = await Api.Login(request);
+	private async Task Login(Api.LoginRequest request) {
+		var response = await ApiClient.Login(request);
 
 		AccessToken = response.access_token;
 		RefreshToken = response.refresh_token;
@@ -153,24 +152,24 @@ public class MatrixClient {
 	/// <summary> Login using a username and a password </summary>
 	/// <param name="deviceId">see <see cref="DeviceId"/>.</param>
 	public async Task PasswordLogin(string username, string password, string? initialDeviceDisplayName = null, string? deviceId = null)
-		=> await PasswordLogin(new IMatrixApi.UserIdentifier(username), password, initialDeviceDisplayName, deviceId);
+		=> await PasswordLogin(new Api.UserIdentifier(username), password, initialDeviceDisplayName, deviceId);
 
-	/// <summary> Login using an <see cref="IMatrixApi.Identifier"/> and a password </summary>
+	/// <summary> Login using an <see cref="Api.Identifier"/> and a password </summary>
 	/// <param name="deviceId">See <see cref="DeviceId"/>.</param>
-	public async Task PasswordLogin(IMatrixApi.Identifier identifier, string password, string? initialDeviceDisplayName = null, string? deviceId = null) {
-		await Login(new IMatrixApi.PasswordLoginRequest(identifier, password, initialDeviceDisplayName, deviceId));
+	public async Task PasswordLogin(Api.Identifier identifier, string password, string? initialDeviceDisplayName = null, string? deviceId = null) {
+		await Login(new Api.PasswordLoginRequest(identifier, password, initialDeviceDisplayName, deviceId));
 	}
 
 	/// <summary> Login using a token </summary>
 	/// <param name="deviceId">See <see cref="DeviceId"/>.</param>
 	public async Task TokenLogin(string token, string? initialDeviceDisplayName = null, string? deviceId = null) {
-		await Login(new IMatrixApi.TokenLoginRequest(token, initialDeviceDisplayName, deviceId));
+		await Login(new Api.TokenLoginRequest(token, initialDeviceDisplayName, deviceId));
 	}
 
 	/// <summary> Refresh the access token using a refresh token </summary>
 	public async Task Refresh() {
 		if (RefreshToken is null) throw new LoginRequiredException();
-		var response = await Api.Refresh(new IMatrixApi.RefreshRequest(RefreshToken));
+		var response = await ApiClient.Refresh(new Api.RefreshRequest(RefreshToken));
 
 		AccessToken = response.access_token;
 		RefreshToken = response.refresh_token;
@@ -179,41 +178,31 @@ public class MatrixClient {
 
 	/// <summary> Get joined rooms. <see href="https://spec.matrix.org/v1.11/client-server-api/#get_matrixclientv3joined_rooms"/> </summary>
 	public async Task<string[]> GetJoinedRooms() {
-		var response = await Retry.RetryAsync(async () => await Api.GetJoinedRooms());
+		var response = await Retry.RetryAsync(async () => await ApiClient.GetJoinedRooms());
 
 		return response.joined_rooms;
 	}
 
 	/// <summary> Send a <c>m.room.message</c> event to a room. </summary>
 	/// <returns> The <c>event_id</c> of the sent message </returns>
-	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : IMatrixApi.Message {
-		var response = await Retry.RetryAsync(async () => await Api.SendEvent(roomId, "m.room.message", GenerateTransactionId(), message));
+	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : Api.Message {
+		var response = await Retry.RetryAsync(async () => await ApiClient.SendEvent(roomId, "m.room.message", GenerateTransactionId(), message));
 
 		return response.event_id;
 	}
 
 	/// <summary> Send a basic <c>m.text</c> message to a room. </summary>
 	/// <returns> The <c>event_id</c> of the sent message </returns>
-	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new IMatrixApi.TextMessage(body));
+	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new Api.TextMessage(body));
 
-	public record EventWithState(
-		IMatrixApi.Event Event,
-		StateDict State
-	) {
-		public IMatrixApi.RoomMember? GetSender() {
-			if (Event.sender is null || !State.TryGetValue(new StateKey("m.room.member", Event.sender), out var member)) return null;
-			return (IMatrixApi.RoomMember?)member;
-		}
-	};
-
-	public static EventWithState[] Resolve(IEnumerable<IMatrixApi.Event> events, StateDict? stateDict = null, bool rewind = false) {
+	public static EventWithState[] Resolve(IEnumerable<Api.Event> events, StateDict? stateDict = null, bool rewind = false) {
 		if (stateDict is null) stateDict = StateDict.Empty;
 		List<EventWithState> list = new();
 		foreach (var ev in events) {
 			if (ev.IsState) {
 				var key = new StateKey(ev.type, ev.state_key!);
 				if (rewind) {
-					if (ev is not IMatrixApi.ClientEvent clientEvent) throw new InvalidOperationException("Cannot backwards resolve with stripped state");
+					if (ev is not Api.ClientEvent clientEvent) throw new InvalidOperationException("Cannot backwards resolve with stripped state");
 					if (clientEvent.unsigned is null || clientEvent.unsigned.prev_content is null) stateDict = stateDict.Remove(key);
 					else stateDict = stateDict.SetItem(key, clientEvent.unsigned.prev_content);
 				} else {
@@ -233,174 +222,12 @@ public class MatrixClient {
 
 	public Dictionary<string, StateDict> InvitiedState { get; private set; } = new();
 	public Dictionary<string, StateDict> KnockState { get; private set; } = new();
-	private record TimelinePoint(
-		EventWithState? Event,
-		string? From,
-		string? To
-	) {
-		public bool IsHole => Event is null;
-	};
-
-	private class TimelineEvent : ITimelineEvent {
-		public EventWithState Event { get; private set; }
-		private MatrixClient Client;
-		private string RoomId;
-
-		private LinkedListNode<TimelinePoint> Node;
-		public TimelineEvent(LinkedListNode<TimelinePoint> node, MatrixClient client, string roomId) {
-			if (node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
-			if (node.List is null) throw new ArgumentNullException("TimelineEvent instantiated with orphan node");
-			Event = node.Value.Event;
-			Node = node;
-			Client = client;
-			RoomId = roomId;
-		}
-
-		public async Task<ITimelineEvent?> Next() {
-			if (Node.Next is null) return null;
-			if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
-
-			var hole = Node.Next.Value;
-			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.f, from: hole.From, to: hole.To));
-
-
-			var state = Event.State;
-			if (response.state is not null)
-				state = Resolve(response.state, state).LastOrDefault()?.State;
-
-			var newMessages = Resolve(response.chunk, state);
-
-			Node.List!.Remove(Node.Next);
-
-			if (response.end is not null)
-				Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
-
-			foreach (var message in newMessages.Reverse()) {
-				Node.List.AddAfter(Node, new TimelinePoint(message, null, null));
-			}
-
-			if (newMessages.Count() == 0) return null;
-
-			return new TimelineEvent(Node.Next, Client, RoomId);
-		}
-
-		public async Task<ITimelineEvent?> Previous() {
-			if (Node.Previous is null) return null;
-			if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
-
-			var hole = Node.Previous.Value;
-			var response = await Retry.RetryAsync(async () => await Client.Api.GetRoomMessages(RoomId, IMatrixApi.Dir.b, from: hole.To, to: hole.From));
-
-			var state = Event.State;
-			if (response.state is not null)
-				state = Resolve(response.state, state).LastOrDefault()?.State;
-
-			var newMessages = Resolve(response.chunk, state, rewind: true);
-
-			Node.List!.Remove(Node.Previous);
-
-			if (response.end is not null)
-				Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
-
-			foreach (var message in newMessages.Reverse()) {
-				Node.List.AddBefore(Node, new TimelinePoint(message, null, null));
-			}
-
-			if (newMessages.Count() == 0) return null;
-
-			return new TimelineEvent(Node.Previous, Client, RoomId);
-		}
-
-	};
-	public interface ITimelineEvent {
-		public EventWithState Event { get; }
-		public Task<ITimelineEvent?> Next();
-		public Task<ITimelineEvent?> Previous();
-		public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
-			ITimelineEvent? current = this;
-			do {
-				yield return current;
-				current = await current.Next();
-			} while (current is not null);
-		}
-		public async IAsyncEnumerable<ITimelineEvent> EnumerateBackward() {
-			ITimelineEvent? current = this;
-			do {
-				yield return current;
-				current = await current.Previous();
-			} while (current is not null);
-		}
-	}
-
-	public class Timeline {
-		// TODO: lock linked list
-		private LinkedList<TimelinePoint> EventList = new();
-
-		private MatrixClient Client;
-		private string RoomId;
-
-		public ITimelineEvent? First {
-			get {
-				LinkedListNode<TimelinePoint>? node = EventList.First;
-				if (node is null) return null;
-				while (node.Value.Event is null) {
-					node = node.Next;
-					if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
-				}
-				return new TimelineEvent(node, Client, RoomId);
-			}
-		}
-
-		public ITimelineEvent? Last {
-			get {
-				LinkedListNode<TimelinePoint>? node = EventList.Last;
-				if (node is null) return null;
-				while (node.Value.Event is null) {
-					node = node.Previous;
-					if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
-				}
-				return new TimelineEvent(node, Client, RoomId);
-			}
-		}
-
-		public void Sync(IMatrixApi.Timeline timeline, StateDict? state, bool isGapped) {
-			if (isGapped) {
-				if (EventList.Last is not null && EventList.Last.Value.IsHole) {
-					EventList.Last.Value = new TimelinePoint(null, EventList.Last.Value.From, timeline.prev_batch);
-				} else {
-					EventList.AddLast(new TimelinePoint(null, null, timeline.prev_batch));
-				}
-			}
-
-			var resolvedEvents = MatrixClient.Resolve(timeline.events, state);
-
-			foreach (var ev in resolvedEvents) {
-				EventList.AddLast(new TimelinePoint(ev, null, null));
-			}
-		}
-
-		public Timeline(MatrixClient client, string roomId) {
-			Client = client;
-			RoomId = roomId;
-		}
-
-	}
-
-	public record JoinedRoom(
-		StateDict account_data,
-		StateDict ephemeral,
-		StateDict state,
-		IMatrixApi.RoomSummary summary,
-		Timeline timeline,
-		IMatrixApi.UnreadNotificationCounts unread_notifications,
-		Dictionary<string, IMatrixApi.UnreadNotificationCounts> unread_thread_notifications
-	);
 	public Dictionary<string, JoinedRoom> JoinedRooms { get; private set; } = new();
 
 	public string? NextBatch { get; private set; }
 
 	private async Task SyncUnsafe(int timeout) {
-		var response = await Retry.RetryAsync(async () => await Api.Sync(timeout: timeout, since: NextBatch));
+		var response = await Retry.RetryAsync(async () => await ApiClient.Sync(timeout: timeout, since: NextBatch));
 
 		string original_batch = NextBatch;
 		NextBatch = response.next_batch;
@@ -435,12 +262,12 @@ public class MatrixClient {
 					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).LastOrDefault()?.State;
 					StateDict? ephemeral = Resolve(roomResponse.ephemeral.events, room?.ephemeral).LastOrDefault()?.State;
 					StateDict? state = Resolve(roomResponse.state.events, room?.state).LastOrDefault()?.State;
-					IMatrixApi.RoomSummary summary = roomResponse.summary;
+					Api.RoomSummary summary = roomResponse.summary;
 					Timeline timeline = room?.timeline ?? new Timeline(this, id);
 					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
 					state = timeline.Last?.Event.State;
-					IMatrixApi.UnreadNotificationCounts unread_notifications = roomResponse.unread_notifications;
-					Dictionary<string, IMatrixApi.UnreadNotificationCounts> unread_thread_notifications = room?.unread_thread_notifications ?? new();
+					Api.UnreadNotificationCounts unread_notifications = roomResponse.unread_notifications;
+					Dictionary<string, Api.UnreadNotificationCounts> unread_thread_notifications = room?.unread_thread_notifications ?? new();
 					if (roomResponse.unread_thread_notifications is not null)
 						foreach (var kv in roomResponse.unread_thread_notifications) unread_thread_notifications[kv.Key] = kv.Value;
 
@@ -481,13 +308,14 @@ public class MatrixClient {
 
 	}
 
-	/// <summary> Can be serialized to JSON for persistence of login information between program runs. </summary>
-	public record struct LoginData(
-		Uri Homeserver,
-		string? AccessToken,
-		string? RefreshToken,
-		string? UserId,
-		string? DeviceId,
-		DateTime? ExpiresAt
-	);
 }
+
+/// <summary> Can be serialized to JSON for persistence of login information between program runs. </summary>
+public record struct LoginData(
+	Uri Homeserver,
+	string? AccessToken,
+	string? RefreshToken,
+	string? UserId,
+	string? DeviceId,
+	DateTime? ExpiresAt
+);
