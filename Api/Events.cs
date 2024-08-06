@@ -3,7 +3,7 @@ namespace matrix_dotnet.Api;
 [JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
 [JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
 [JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
-public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender) {
+public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, string? event_id) {
 	public bool IsState { get { return state_key is not null; } }
 };
 
@@ -13,7 +13,7 @@ public record StrippedStateEvent(
 	string sender,
 	string state_key,
 	string type
-) : Event(content, type, state_key, sender);
+) : Event(content, type, state_key, sender, null);
 
 public record ClientEvent(
 	[JsonPropertyTargetProperty]
@@ -26,7 +26,7 @@ public record ClientEvent(
 	[JsonPropertyRecursive]
 		UnsignedData? unsigned,
 	string type
-) : Event(content, type, state_key, sender);
+) : Event(content, type, state_key, sender, event_id);
 
 public record ClientEventWithoutRoomID(
 	[JsonPropertyTargetProperty]

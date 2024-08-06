@@ -24,15 +24,20 @@ internal record TimelinePoint(
 };
 
 internal class TimelineEvent : ITimelineEvent {
-	public EventWithState Event { get; private set; }
+	public EventWithState Value { get; private set; }
 	private MatrixClient Client;
 	private string RoomId;
+	
+	internal void RemoveSelf() {
+		if (Node.List is null) return;
+		Node.List.Remove(Node);
+	}
 
 	private LinkedListNode<TimelinePoint> Node;
 	public TimelineEvent(LinkedListNode<TimelinePoint> node, MatrixClient client, string roomId) {
 		if (node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 		if (node.List is null) throw new ArgumentNullException("TimelineEvent instantiated with orphan node");
-		Event = node.Value.Event;
+		Value = node.Value.Event;
 		Node = node;
 		Client = client;
 		RoomId = roomId;
@@ -46,7 +51,7 @@ internal class TimelineEvent : ITimelineEvent {
 		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.f, from: hole.From, to: hole.To));
 
 
-		var state = Event.State;
+		var state = Value.State;
 		if (response.state is not null)
 			state = MatrixClient.Resolve(response.state, state).LastOrDefault()?.State;
 
@@ -58,7 +63,9 @@ internal class TimelineEvent : ITimelineEvent {
 			Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
 
 		foreach (var message in newMessages.Reverse()) {
-			Node.List.AddAfter(Node, new TimelinePoint(message, null, null));
+			var point = new TimelinePoint(message, null, null);
+			Node.List.AddAfter(Node, point);
+			Client.Deduplicate(new TimelineEvent(Node.Next, Client, RoomId));
 		}
 
 		if (newMessages.Count() == 0) return null;
@@ -73,7 +80,7 @@ internal class TimelineEvent : ITimelineEvent {
 		var hole = Node.Previous.Value;
 		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.b, from: hole.To, to: hole.From));
 
-		var state = Event.State;
+		var state = Value.State;
 		if (response.state is not null)
 			state = MatrixClient.Resolve(response.state, state).LastOrDefault()?.State;
 
@@ -85,7 +92,9 @@ internal class TimelineEvent : ITimelineEvent {
 			Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
 
 		foreach (var message in newMessages.Reverse()) {
-			Node.List.AddBefore(Node, new TimelinePoint(message, null, null));
+			var point = new TimelinePoint(message, null, null);
+			Node.List.AddBefore(Node, point);
+			Client.Deduplicate(new TimelineEvent(Node.Previous, Client, RoomId));
 		}
 
 		if (newMessages.Count() == 0) return null;
@@ -95,7 +104,7 @@ internal class TimelineEvent : ITimelineEvent {
 
 };
 public interface ITimelineEvent {
-	public EventWithState Event { get; }
+	public EventWithState Value { get; }
 	public Task<ITimelineEvent?> Next();
 	public Task<ITimelineEvent?> Previous();
 	public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
@@ -178,5 +187,9 @@ public record JoinedRoom(
 	Dictionary<string, Api.UnreadNotificationCounts> unread_thread_notifications
 );
 
-
+public record LeftRoom(
+	StateDict account_data,
+	StateDict state,
+	Timeline timeline
+);
 

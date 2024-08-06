@@ -223,13 +223,24 @@ public class MatrixClient {
 	public Dictionary<string, StateDict> InvitiedState { get; private set; } = new();
 	public Dictionary<string, StateDict> KnockState { get; private set; } = new();
 	public Dictionary<string, JoinedRoom> JoinedRooms { get; private set; } = new();
+	public Dictionary<string, LeftRoom> LeftRooms { get; private set; } = new();
 
 	public string? NextBatch { get; private set; }
+
+	public Dictionary<string, ITimelineEvent> EventsById { get; private set; } = new();
+
+	internal void Deduplicate(TimelineEvent e) {
+		if (e.Value.Event.event_id is null) return;
+		if (EventsById.TryGetValue(e.Value.Event.event_id, out var conflict)) {
+			((TimelineEvent)conflict).RemoveSelf();
+		}
+		EventsById[e.Value.Event.event_id] = e;
+	}
 
 	private async Task SyncUnsafe(int timeout) {
 		var response = await Retry.RetryAsync(async () => await ApiClient.Sync(timeout: timeout, since: NextBatch));
 
-		string original_batch = NextBatch;
+		string? original_batch = NextBatch;
 		NextBatch = response.next_batch;
 
 		if (response.presence is not null)
@@ -265,7 +276,7 @@ public class MatrixClient {
 					Api.RoomSummary summary = roomResponse.summary;
 					Timeline timeline = room?.timeline ?? new Timeline(this, id);
 					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
-					state = timeline.Last?.Event.State;
+					state = timeline.Last?.Value.State;
 					Api.UnreadNotificationCounts unread_notifications = roomResponse.unread_notifications;
 					Dictionary<string, Api.UnreadNotificationCounts> unread_thread_notifications = room?.unread_thread_notifications ?? new();
 					if (roomResponse.unread_thread_notifications is not null)
@@ -281,7 +292,25 @@ public class MatrixClient {
 						unread_thread_notifications
 					);
 				}
-			// TODO: left rooms
+			if (response.rooms.leave is not null)
+				foreach (var leftRoom in response.rooms.leave) {
+					string id = leftRoom.Key;
+					var roomResponse = leftRoom.Value;
+					LeftRoom? room = null;
+					LeftRooms.TryGetValue(id, out room);
+
+					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).LastOrDefault()?.State;
+					StateDict? state = Resolve(roomResponse.state.events, room?.state).LastOrDefault()?.State;
+					Timeline timeline = room?.timeline ?? new Timeline(this, id);
+					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
+					state = timeline.Last?.Value.State;
+
+					LeftRooms[id] = new LeftRoom(
+						account_data ?? StateDict.Empty,
+						state ?? StateDict.Empty,
+						timeline
+					);
+				}
 		}
 
 	}
