@@ -195,7 +195,7 @@ public class MatrixClient {
 	/// <returns> The <c>event_id</c> of the sent message </returns>
 	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new Api.TextMessage(body));
 
-	public static EventWithState[] Resolve(IEnumerable<Api.Event> events, StateDict? stateDict = null, bool rewind = false) {
+	public static (EventWithState[] events, StateDict state) Resolve(IEnumerable<Api.Event> events, StateDict? stateDict = null, bool rewind = false) {
 		if (stateDict is null) stateDict = StateDict.Empty;
 		List<EventWithState> list = new();
 		foreach (var ev in events) {
@@ -215,7 +215,7 @@ public class MatrixClient {
 				stateDict
 			));
 		}
-		return list.ToArray();
+		return (list.ToArray(), stateDict);
 	}
 
 	public StateDict? PresenceState { get; private set; }
@@ -233,6 +233,7 @@ public class MatrixClient {
 		if (e.Value.Event.event_id is null) return;
 		if (EventsById.TryGetValue(e.Value.Event.event_id, out var conflict)) {
 			((TimelineEvent)conflict).RemoveSelf();
+			Console.WriteLine($"Removed event with conflicting ID: {conflict}");
 		}
 		EventsById[e.Value.Event.event_id] = e;
 	}
@@ -244,14 +245,14 @@ public class MatrixClient {
 		NextBatch = response.next_batch;
 
 		if (response.presence is not null)
-			PresenceState = Resolve(response.presence.events, PresenceState).Last().State;
+			PresenceState = Resolve(response.presence.events, PresenceState).state;
 
 		if (response.rooms is not null) {
 			if (response.rooms.invite is not null)
 				foreach (var invitedRoom in response.rooms.invite) {
 					StateDict? state = null;
 					InvitiedState.TryGetValue(invitedRoom.Key, out state);
-					StateDict? resolvedState = Resolve(invitedRoom.Value.invite_state.events, state).LastOrDefault()?.State;
+					StateDict? resolvedState = Resolve(invitedRoom.Value.invite_state.events, state).state;
 					if (resolvedState is not null)
 						InvitiedState[invitedRoom.Key] = resolvedState;
 				}
@@ -259,7 +260,7 @@ public class MatrixClient {
 				foreach (var knockedRoom in response.rooms.knock) {
 					StateDict? state = null;
 					KnockState.TryGetValue(knockedRoom.Key, out state);
-					StateDict? resolvedState = Resolve(knockedRoom.Value.knock_state.events, state).LastOrDefault()?.State;
+					StateDict? resolvedState = Resolve(knockedRoom.Value.knock_state.events, state).state;
 					if (resolvedState is not null)
 						KnockState[knockedRoom.Key] = resolvedState;
 				}
@@ -270,13 +271,13 @@ public class MatrixClient {
 					JoinedRoom? room = null;
 					JoinedRooms.TryGetValue(id, out room);
 
-					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).LastOrDefault()?.State;
-					StateDict? ephemeral = Resolve(roomResponse.ephemeral.events, room?.ephemeral).LastOrDefault()?.State;
-					StateDict? state = Resolve(roomResponse.state.events, room?.state).LastOrDefault()?.State;
+					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).state;
+					StateDict? ephemeral = Resolve(roomResponse.ephemeral.events, room?.ephemeral).state;
+					StateDict? state = Resolve(roomResponse.state.events, room?.state).state;
 					Api.RoomSummary summary = roomResponse.summary;
 					Timeline timeline = room?.timeline ?? new Timeline(this, id);
-					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
-					state = timeline.Last?.Value.State;
+					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch, original_batch);
+					state = timeline.Last?.Value.State ?? state;
 					Api.UnreadNotificationCounts unread_notifications = roomResponse.unread_notifications;
 					Dictionary<string, Api.UnreadNotificationCounts> unread_thread_notifications = room?.unread_thread_notifications ?? new();
 					if (roomResponse.unread_thread_notifications is not null)
@@ -299,10 +300,10 @@ public class MatrixClient {
 					LeftRoom? room = null;
 					LeftRooms.TryGetValue(id, out room);
 
-					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).LastOrDefault()?.State;
-					StateDict? state = Resolve(roomResponse.state.events, room?.state).LastOrDefault()?.State;
+					StateDict? account_data = Resolve(roomResponse.account_data.events, room?.account_data).state;
+					StateDict? state = Resolve(roomResponse.state.events, room?.state).state;
 					Timeline timeline = room?.timeline ?? new Timeline(this, id);
-					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch != original_batch);
+					timeline.Sync(roomResponse.timeline, state, roomResponse.timeline.prev_batch, original_batch);
 					state = timeline.Last?.Value.State;
 
 					LeftRooms[id] = new LeftRoom(
@@ -316,12 +317,14 @@ public class MatrixClient {
 	}
 
 	private bool Syncing = false;
+	private bool Filling = false;
 	private object SyncLock = new();
 
 	public async Task Sync(int timeout = 0) {
 		lock (SyncLock) {
+			while (Filling) Monitor.Wait(SyncLock);
 			if (Syncing) {
-				// Another sync is happening, return after it is done.
+				// Another sync is happening, we don't have to sync again right after it.
 				while (Syncing) Monitor.Wait(SyncLock);
 				return;
 			} else {
@@ -335,6 +338,20 @@ public class MatrixClient {
 			Syncing = false;
 		}
 
+	}
+
+	internal void FillLock() {
+		lock (SyncLock) {
+			while (Filling || Syncing) Monitor.Wait(SyncLock);
+			Filling = true;
+		}
+	}
+
+	internal void FillUnlock() {
+		lock (SyncLock) {
+			if (!Filling) throw new InvalidOperationException("Not locked");
+			Filling = false;
+		}
 	}
 
 }

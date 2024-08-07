@@ -24,7 +24,13 @@ internal record TimelinePoint(
 };
 
 internal class TimelineEvent : ITimelineEvent {
-	public EventWithState Value { get; private set; }
+	public EventWithState Value {
+		get {
+			CheckOrphan();
+			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
+			return Node.Value.Event;
+		}
+	}
 	private MatrixClient Client;
 	private string RoomId;
 	
@@ -37,15 +43,32 @@ internal class TimelineEvent : ITimelineEvent {
 	public TimelineEvent(LinkedListNode<TimelinePoint> node, MatrixClient client, string roomId) {
 		if (node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 		if (node.List is null) throw new ArgumentNullException("TimelineEvent instantiated with orphan node");
-		Value = node.Value.Event;
 		Node = node;
 		Client = client;
 		RoomId = roomId;
 	}
+	
+	private void CheckOrphan() {
+		if (Node.List is null) {
+			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
+			string? event_id = Node.Value.Event.Event.event_id;
+			if (event_id is null) throw new ArgumentNullException("Orphaned node has no event_id");
+			Node = ((TimelineEvent)Client.EventsById[event_id]).Node;
+			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
+		}
+	}
 
 	public async Task<ITimelineEvent?> Next() {
+		CheckOrphan();
+
 		if (Node.Next is null) return null;
 		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
+
+		Client.FillLock();
+		if (Node.Next.Value.Event is not null) {
+			Client.FillUnlock();
+			return new TimelineEvent(Node.Next, Client, RoomId);
+		}
 
 		var hole = Node.Next.Value;
 		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.f, from: hole.From, to: hole.To));
@@ -53,9 +76,9 @@ internal class TimelineEvent : ITimelineEvent {
 
 		var state = Value.State;
 		if (response.state is not null)
-			state = MatrixClient.Resolve(response.state, state).LastOrDefault()?.State;
+			state = MatrixClient.Resolve(response.state, state).state;
 
-		var newMessages = MatrixClient.Resolve(response.chunk, state);
+		var newMessages = MatrixClient.Resolve(response.chunk, state).events;
 
 		Node.List!.Remove(Node.Next);
 
@@ -68,23 +91,35 @@ internal class TimelineEvent : ITimelineEvent {
 			Client.Deduplicate(new TimelineEvent(Node.Next, Client, RoomId));
 		}
 
+		var next = Node.Next;
+
+		Client.FillUnlock();
+
 		if (newMessages.Count() == 0) return null;
 
-		return new TimelineEvent(Node.Next, Client, RoomId);
+		return new TimelineEvent(next, Client, RoomId);
 	}
 
 	public async Task<ITimelineEvent?> Previous() {
+		CheckOrphan();
+
 		if (Node.Previous is null) return null;
 		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
+
+		Client.FillLock();
+		if (Node.Previous.Value.Event is not null) {
+			Client.FillUnlock();
+			return new TimelineEvent(Node.Previous, Client, RoomId);
+		}
 
 		var hole = Node.Previous.Value;
 		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.b, from: hole.To, to: hole.From));
 
 		var state = Value.State;
 		if (response.state is not null)
-			state = MatrixClient.Resolve(response.state, state).LastOrDefault()?.State;
+			state = MatrixClient.Resolve(response.state, state).state;
 
-		var newMessages = MatrixClient.Resolve(response.chunk, state, rewind: true);
+		var newMessages = MatrixClient.Resolve(response.chunk, state, rewind: true).events;
 
 		Node.List!.Remove(Node.Previous);
 
@@ -97,16 +132,33 @@ internal class TimelineEvent : ITimelineEvent {
 			Client.Deduplicate(new TimelineEvent(Node.Previous, Client, RoomId));
 		}
 
+		var previous = Node.Previous;
+		
+		Client.FillUnlock();
+
 		if (newMessages.Count() == 0) return null;
 
-		return new TimelineEvent(Node.Previous, Client, RoomId);
+		return new TimelineEvent(previous, Client, RoomId);
 	}
 
+	public ITimelineEvent? NextSync() {
+		if (Node.Next is null) return null;
+		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
+		return null;
+	}
+
+	public ITimelineEvent? PreviousSync() {
+		if (Node.Previous is null) return null;
+		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
+		return null;
+	}
 };
 public interface ITimelineEvent {
 	public EventWithState Value { get; }
 	public Task<ITimelineEvent?> Next();
 	public Task<ITimelineEvent?> Previous();
+	public ITimelineEvent? NextSync();
+	public ITimelineEvent? PreviousSync();
 	public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
 		ITimelineEvent? current = this;
 		do {
@@ -119,6 +171,20 @@ public interface ITimelineEvent {
 		do {
 			yield return current;
 			current = await current.Previous();
+		} while (current is not null);
+	}
+	public IEnumerable<ITimelineEvent> EnumerateForwardSync() {
+		ITimelineEvent? current = this;
+		do {
+			yield return current;
+			current = current.NextSync();
+		} while (current is not null);
+	}
+	public IEnumerable<ITimelineEvent> EnumerateBackwardSync() {
+		ITimelineEvent? current = this;
+		do {
+			yield return current;
+			current = current.PreviousSync();
 		} while (current is not null);
 	}
 }
@@ -154,16 +220,12 @@ public class Timeline {
 		}
 	}
 
-	public void Sync(Api.Timeline timeline, StateDict? state, bool isGapped) {
-		if (isGapped) {
-			if (EventList.Last is not null && EventList.Last.Value.IsHole) {
-				EventList.Last.Value = new TimelinePoint(null, EventList.Last.Value.From, timeline.prev_batch);
-			} else {
-				EventList.AddLast(new TimelinePoint(null, null, timeline.prev_batch));
-			}
+	public void Sync(Api.Timeline timeline, StateDict? state, string prev_batch, string? original_batch) {
+		if (prev_batch != original_batch) {
+			EventList.AddLast(new TimelinePoint(null, original_batch, prev_batch));
 		}
 
-		var resolvedEvents = MatrixClient.Resolve(timeline.events, state);
+		var resolvedEvents = MatrixClient.Resolve(timeline.events, state).events;
 
 		foreach (var ev in resolvedEvents) {
 			EventList.AddLast(new TimelinePoint(ev, null, null));
