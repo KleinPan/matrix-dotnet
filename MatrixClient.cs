@@ -183,13 +183,16 @@ public class MatrixClient {
 		return response.joined_rooms;
 	}
 
-	/// <summary> Send a <c>m.room.message</c> event to a room. </summary>
-	/// <returns> The <c>event_id</c> of the sent message </returns>
-	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : Api.Message {
-		var response = await Retry.RetryAsync(async () => await ApiClient.SendEvent(roomId, "m.room.message", GenerateTransactionId(), message));
+	public async Task<string> SendEvent<TEvent>(string roomId, string type, TEvent ev) where TEvent: Api.EventContent {
+		var txnId = GenerateTransactionId();
+		var response = await Retry.RetryAsync(async () => await ApiClient.SendEvent(roomId, type, txnId, ev));
 
 		return response.event_id;
 	}
+
+	/// <summary> Send a <c>m.room.message</c> event to a room. </summary>
+	/// <returns> The <c>event_id</c> of the sent message </returns>
+	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : Api.Message => await SendEvent(roomId, "m.room.message", message);
 
 	/// <summary> Send a basic <c>m.text</c> message to a room. </summary>
 	/// <returns> The <c>event_id</c> of the sent message </returns>
@@ -210,10 +213,11 @@ public class MatrixClient {
 				}
 			}
 
-			list.Add(new EventWithState(
-				ev,
-				stateDict
-			));
+			if (ev is Api.ClientEvent clev)
+				list.Add(new EventWithState(
+					clev,
+					stateDict
+				));
 		}
 		return (list.ToArray(), stateDict);
 	}
@@ -352,6 +356,26 @@ public class MatrixClient {
 			if (!Filling) throw new InvalidOperationException("Not locked");
 			Filling = false;
 		}
+	}
+
+	internal void RedactEvent(Api.ClientEvent redactionEvent) {
+		if (redactionEvent.content is not Api.Redaction redaction) throw new ArgumentException("Argument is not a redaction event");
+		if (EventsById.TryGetValue(redaction.redacts, out var point)) {
+			var orig_event = point.Value;
+			((TimelineEvent)EventsById[redaction.redacts]).Value = new EventWithState(
+				orig_event.Event with { content = null, unsigned = (orig_event.Event.unsigned ?? new Api.UnsignedData()) with { redacted_because = redactionEvent } },
+				orig_event.State
+			);
+		}
+	}
+
+
+	public async Task<string> Redact(string roomId, string eventId, string? reason = null) {
+		var txnId = GenerateTransactionId();
+		var response = await Retry.RetryAsync(async () => await ApiClient.Redact(eventId, roomId, txnId, new Api.RedactRequest(reason)));
+
+		return response.event_id;
+
 	}
 
 }

@@ -6,7 +6,7 @@ using StateDict = ImmutableDictionary<StateKey, Api.EventContent>;
 public record StateKey(string type, string state_key);
 
 public record EventWithState(
-	Api.Event Event,
+	Api.ClientEvent Event,
 	StateDict State
 ) {
 	public Api.RoomMember? GetSender() {
@@ -30,30 +30,32 @@ internal class TimelineEvent : ITimelineEvent {
 			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 			return Node.Value.Event;
 		}
+		internal set {
+			CheckOrphan();
+			Node.Value = new TimelinePoint(value, null, null);
+		}
 	}
-	private MatrixClient Client;
-	private string RoomId;
-	
+	private Timeline Timeline;
+
 	internal void RemoveSelf() {
 		if (Node.List is null) return;
 		Node.List.Remove(Node);
 	}
 
 	private LinkedListNode<TimelinePoint> Node;
-	public TimelineEvent(LinkedListNode<TimelinePoint> node, MatrixClient client, string roomId) {
+	public TimelineEvent(LinkedListNode<TimelinePoint> node, Timeline timeline) {
 		if (node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 		if (node.List is null) throw new ArgumentNullException("TimelineEvent instantiated with orphan node");
 		Node = node;
-		Client = client;
-		RoomId = roomId;
+		Timeline = timeline;
 	}
-	
+
 	private void CheckOrphan() {
 		if (Node.List is null) {
 			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 			string? event_id = Node.Value.Event.Event.event_id;
 			if (event_id is null) throw new ArgumentNullException("Orphaned node has no event_id");
-			Node = ((TimelineEvent)Client.EventsById[event_id]).Node;
+			Node = ((TimelineEvent)Timeline.Client.EventsById[event_id]).Node;
 			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 		}
 	}
@@ -62,16 +64,16 @@ internal class TimelineEvent : ITimelineEvent {
 		CheckOrphan();
 
 		if (Node.Next is null) return null;
-		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
+		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Timeline);
 
-		Client.FillLock();
+		Timeline.Client.FillLock();
 		if (Node.Next.Value.Event is not null) {
-			Client.FillUnlock();
-			return new TimelineEvent(Node.Next, Client, RoomId);
+			Timeline.Client.FillUnlock();
+			return new TimelineEvent(Node.Next, Timeline);
 		}
 
 		var hole = Node.Next.Value;
-		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.f, from: hole.From, to: hole.To));
+		var response = await Retry.RetryAsync(async () => await Timeline.Client.ApiClient.GetRoomMessages(Timeline.RoomId, Api.Dir.f, from: hole.From, to: hole.To));
 
 
 		var state = Value.State;
@@ -86,34 +88,35 @@ internal class TimelineEvent : ITimelineEvent {
 			Node.List.AddAfter(Node, new TimelinePoint(null, response.end, hole.To));
 
 		foreach (var message in newMessages.Reverse()) {
+			Timeline.BeforeAddingEvent(message);
 			var point = new TimelinePoint(message, null, null);
 			Node.List.AddAfter(Node, point);
-			Client.Deduplicate(new TimelineEvent(Node.Next, Client, RoomId));
+			Timeline.Client.Deduplicate(new TimelineEvent(Node.Next, Timeline));
 		}
 
 		var next = Node.Next;
 
-		Client.FillUnlock();
+		Timeline.Client.FillUnlock();
 
 		if (newMessages.Count() == 0) return null;
 
-		return new TimelineEvent(next, Client, RoomId);
+		return new TimelineEvent(next, Timeline);
 	}
 
 	public async Task<ITimelineEvent?> Previous() {
 		CheckOrphan();
 
 		if (Node.Previous is null) return null;
-		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
+		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Timeline);
 
-		Client.FillLock();
+		Timeline.Client.FillLock();
 		if (Node.Previous.Value.Event is not null) {
-			Client.FillUnlock();
-			return new TimelineEvent(Node.Previous, Client, RoomId);
+			Timeline.Client.FillUnlock();
+			return new TimelineEvent(Node.Previous, Timeline);
 		}
 
 		var hole = Node.Previous.Value;
-		var response = await Retry.RetryAsync(async () => await Client.ApiClient.GetRoomMessages(RoomId, Api.Dir.b, from: hole.To, to: hole.From));
+		var response = await Retry.RetryAsync(async () => await Timeline.Client.ApiClient.GetRoomMessages(Timeline.RoomId, Api.Dir.b, from: hole.To, to: hole.From));
 
 		var state = Value.State;
 		if (response.state is not null)
@@ -127,29 +130,30 @@ internal class TimelineEvent : ITimelineEvent {
 			Node.List.AddBefore(Node, new TimelinePoint(null, hole.From, response.end));
 
 		foreach (var message in newMessages.Reverse()) {
+			Timeline.BeforeAddingEvent(message);
 			var point = new TimelinePoint(message, null, null);
 			Node.List.AddBefore(Node, point);
-			Client.Deduplicate(new TimelineEvent(Node.Previous, Client, RoomId));
+			Timeline.Client.Deduplicate(new TimelineEvent(Node.Previous, Timeline));
 		}
 
 		var previous = Node.Previous;
-		
-		Client.FillUnlock();
+
+		Timeline.Client.FillUnlock();
 
 		if (newMessages.Count() == 0) return null;
 
-		return new TimelineEvent(previous, Client, RoomId);
+		return new TimelineEvent(previous, Timeline);
 	}
 
-	public ITimelineEvent? NextSync() {
+	public ITimelineEvent? NextOffline() {
 		if (Node.Next is null) return null;
-		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Client, RoomId);
+		if (Node.Next.Value.Event is not null) return new TimelineEvent(Node.Next, Timeline);
 		return null;
 	}
 
-	public ITimelineEvent? PreviousSync() {
+	public ITimelineEvent? PreviousOffline() {
 		if (Node.Previous is null) return null;
-		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Client, RoomId);
+		if (Node.Previous.Value.Event is not null) return new TimelineEvent(Node.Previous, Timeline);
 		return null;
 	}
 };
@@ -157,8 +161,8 @@ public interface ITimelineEvent {
 	public EventWithState Value { get; }
 	public Task<ITimelineEvent?> Next();
 	public Task<ITimelineEvent?> Previous();
-	public ITimelineEvent? NextSync();
-	public ITimelineEvent? PreviousSync();
+	public ITimelineEvent? NextOffline();
+	public ITimelineEvent? PreviousOffline();
 	public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
 		ITimelineEvent? current = this;
 		do {
@@ -173,18 +177,18 @@ public interface ITimelineEvent {
 			current = await current.Previous();
 		} while (current is not null);
 	}
-	public IEnumerable<ITimelineEvent> EnumerateForwardSync() {
+	public IEnumerable<ITimelineEvent> EnumerateForwardOffline() {
 		ITimelineEvent? current = this;
 		do {
 			yield return current;
-			current = current.NextSync();
+			current = current.NextOffline();
 		} while (current is not null);
 	}
-	public IEnumerable<ITimelineEvent> EnumerateBackwardSync() {
+	public IEnumerable<ITimelineEvent> EnumerateBackwardOffline() {
 		ITimelineEvent? current = this;
 		do {
 			yield return current;
-			current = current.PreviousSync();
+			current = current.PreviousOffline();
 		} while (current is not null);
 	}
 }
@@ -193,8 +197,8 @@ public class Timeline {
 	// TODO: lock linked list
 	private LinkedList<TimelinePoint> EventList = new();
 
-	private MatrixClient Client;
-	private string RoomId;
+	internal MatrixClient Client { get; private set; }
+	internal string RoomId { get; private set; }
 
 	public ITimelineEvent? First {
 		get {
@@ -204,7 +208,7 @@ public class Timeline {
 				node = node.Next;
 				if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
 			}
-			return new TimelineEvent(node, Client, RoomId);
+			return new TimelineEvent(node, this);
 		}
 	}
 
@@ -216,7 +220,7 @@ public class Timeline {
 				node = node.Previous;
 				if (node is null) throw new Exception("Timeline is only holes. This should not happen.");
 			}
-			return new TimelineEvent(node, Client, RoomId);
+			return new TimelineEvent(node, this);
 		}
 	}
 
@@ -229,8 +233,16 @@ public class Timeline {
 
 		foreach (var ev in resolvedEvents) {
 			EventList.AddLast(new TimelinePoint(ev, null, null));
+			BeforeAddingEvent(ev);
 		}
 	}
+
+	internal void BeforeAddingEvent(EventWithState eventWithState) {
+		if (eventWithState.Event.content is Api.Redaction) {
+			Client.RedactEvent(eventWithState.Event);
+		}
+	}
+
 
 	public Timeline(MatrixClient client, string roomId) {
 		Client = client;

@@ -2,6 +2,7 @@ namespace matrix_dotnet.Api;
 
 [JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
 [JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
+[JsonPropertyDerivedType(typeof(Redaction), typeDiscriminator: "m.room.redaction")]
 [JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
 public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, string? event_id) {
 	public bool IsState { get { return state_key is not null; } }
@@ -9,7 +10,7 @@ public record Event([JsonPropertyTargetProperty] EventContent? content, string t
 
 public record StrippedStateEvent(
 	[JsonPropertyTargetProperty]
-		EventContent? content, // Redacted events have no content
+	EventContent? content, // Redacted events have no content
 	string sender,
 	string state_key,
 	string type
@@ -17,36 +18,38 @@ public record StrippedStateEvent(
 
 public record ClientEvent(
 	[JsonPropertyTargetProperty]
-		EventContent? content,
+	EventContent? content,
 	string event_id,
 	long origin_server_ts,
 	string? room_id,
 	string sender,
 	string? state_key,
 	[JsonPropertyRecursive]
-		UnsignedData? unsigned,
+	UnsignedData? unsigned,
 	string type
-) : Event(content, type, state_key, sender, event_id);
+) : Event(content, type, state_key, sender, event_id) {
+	public bool IsRedacted => unsigned?.redacted_because is not null && content is null;
+};
 
 public record ClientEventWithoutRoomID(
 	[JsonPropertyTargetProperty]
-		EventContent? content,
+	EventContent? content,
 	string event_id,
 	long origin_server_ts,
 	string sender,
 	string? state_key,
 	[JsonPropertyRecursive]
-		UnsignedData? unsigned,
+	UnsignedData? unsigned,
 	string type
 ) : ClientEvent(content, event_id, origin_server_ts, null, sender, state_key, unsigned, type);
 
 public record UnsignedData(
-	int? age,
-	string? membership,
+	int? age = null,
+	string? membership = null,
 	[JsonPropertyTargetProperty]
-		EventContent? prev_content,
-	ClientEvent? redacted_because,
-	string? transaction_id
+	EventContent? prev_content = null,
+	ClientEvent? redacted_because = null,
+	string? transaction_id = null
 );
 
 

@@ -3,9 +3,11 @@ namespace matrix_dotnet.Api;
 /// <summary>Represents a room event content</summary>
 public abstract record EventContent() { };
 public record UnknownEventContent() : EventContent() { };
+public record Redaction(string redacts, string? reason = null) : EventContent();
 
 /// <summary><see cref="SendEvent"/></summary>
 public record SendEventResponse(string event_id);
+public record RedactResponse(string event_id);
 
 /// <summary> Represents any <c>m.room.message</c> event. </summary>
 [JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype", DefaultType = typeof(UnknownMessage))]
