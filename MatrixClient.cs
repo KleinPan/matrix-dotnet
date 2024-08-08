@@ -47,6 +47,23 @@ public class MatrixClient {
 		get => AccessToken is not null;
 	}
 
+	public StateDict? PresenceState { get; private set; }
+
+	public Dictionary<Api.RoomID, StateDict> InvitiedState { get; private set; } = new();
+	public Dictionary<Api.RoomID, StateDict> KnockState { get; private set; } = new();
+	public Dictionary<Api.RoomID, JoinedRoom> JoinedRooms { get; private set; } = new();
+	public Dictionary<Api.RoomID, LeftRoom> LeftRooms { get; private set; } = new();
+
+	public string? NextBatch { get; private set; }
+
+	public Dictionary<Api.EventID, ITimelineEvent> EventsById { get; private set; } = new();
+
+	private bool Syncing = false;
+	private bool Filling = false;
+	private object SyncLock = new();
+
+	/// <summary> Used by the <see cref="ApiClient"/> to supply
+	/// requests with an access token. </summary>
 	private async Task<string> GetAccessToken(HttpRequestMessage request, CancellationToken ct) {
 		if (!LoggedIn) throw new LoginRequiredException();
 		if (Expired) await Refresh();
@@ -55,34 +72,7 @@ public class MatrixClient {
 
 	private RefitSettings RefitSettings;
 
-	private async Task<Exception?> ExceptionFactory(HttpResponseMessage response) {
-		if (response.IsSuccessStatusCode) return null;
-
-		var errorResponse = JsonSerializer.Deserialize<Api.ErrorResponse>(await response.Content.ReadAsStringAsync());
-		if (errorResponse is not null) {
-			if (errorResponse.errcode == "M_UNKNOWN_TOKEN") {
-				if (errorResponse.soft_logout is not null && errorResponse.soft_logout!.Value) {
-					await Refresh();
-					return new Retry.RetryException();
-				} else {
-					AccessToken = null;
-					RefreshToken = null;
-					ExpiresAt = null;
-					return new LoginRequiredException();
-				}
-			}
-
-			return new MatrixApiError(errorResponse.errcode, errorResponse.error, response, null);
-		}
-
-		return await ApiException.Create(
-			response.RequestMessage!,
-			response.RequestMessage!.Method,
-			response,
-			RefitSettings
-		);
-	}
-
+	/// <summary> Generates a transaction id for all requests that need it. </summary>
 	private string GenerateTransactionId() {
 		return Guid.NewGuid().ToString();
 	}
@@ -122,6 +112,8 @@ public class MatrixClient {
 					new PolymorphicNonFirstJsonConverterFactory(),
 					new PolymorphicPropertyJsonConverterFactory(),
 					new MXCConverter(), // It is a bummer that C# doesn't have an interface for loading structs from strings
+					new EventIDConverter(),
+					new RoomIDConverter(),
 					new JsonStringEnumConverter()
 				}
 			})
@@ -130,6 +122,8 @@ public class MatrixClient {
 		ApiClient = RestService.For<Api.IMatrixApi>(client, RefitSettings);
 	}
 
+	/// <summary> Returns a serializable data structure with session data
+	/// that can be used to reconstruct the client later. </summary>
 	public LoginData ToLoginData() {
 		return new LoginData(Homeserver, AccessToken, RefreshToken, UserId, DeviceId, ExpiresAt);
 	}
@@ -149,7 +143,10 @@ public class MatrixClient {
 		UpdateExpiresAt(response.expires_in_ms);
 	}
 
-	/// <summary> Login using a username and a password </summary>
+	/// <summary> Login using a username and a password.
+	/// This API is rate limited however, so for repeated initializations,
+	/// as in command line utilities, use the <see cref="ToLoginData"> to
+	/// cache login data between runs. </summary>
 	/// <param name="deviceId">see <see cref="DeviceId"/>.</param>
 	public async Task PasswordLogin(string username, string password, string? initialDeviceDisplayName = null, string? deviceId = null)
 		=> await PasswordLogin(new Api.UserIdentifier(username), password, initialDeviceDisplayName, deviceId);
@@ -166,7 +163,9 @@ public class MatrixClient {
 		await Login(new Api.TokenLoginRequest(token, initialDeviceDisplayName, deviceId));
 	}
 
-	/// <summary> Refresh the access token using a refresh token </summary>
+	/// <summary> Refresh the access token using a refresh token.
+	/// This is done automatically in case of expiration, but can
+	/// be done manually.</summary>
 	public async Task Refresh() {
 		if (RefreshToken is null) throw new LoginRequiredException();
 		var response = await ApiClient.Refresh(new Api.RefreshRequest(RefreshToken));
@@ -177,13 +176,16 @@ public class MatrixClient {
 	}
 
 	/// <summary> Get joined rooms. <see href="https://spec.matrix.org/v1.11/client-server-api/#get_matrixclientv3joined_rooms"/> </summary>
-	public async Task<string[]> GetJoinedRooms() {
+	[Obsolete("Getting joined rooms this way is deprecated. Use the Sync method and then find joined rooms in the JoinedRooms property.")]
+	public async Task<Api.RoomID[]> GetJoinedRooms() {
 		var response = await Retry.RetryAsync(async () => await ApiClient.GetJoinedRooms());
 
 		return response.joined_rooms;
 	}
 
-	public async Task<string> SendEvent<TEvent>(string roomId, string type, TEvent ev) where TEvent: Api.EventContent {
+	/// <summary> Send any arbitrary event to a room. </summary>
+	/// <returns> The <c>event_id</c> of the sent event </returns>
+	public async Task<Api.EventID> SendEvent<TEvent>(Api.RoomID roomId, string type, TEvent ev) where TEvent: Api.EventContent {
 		var txnId = GenerateTransactionId();
 		var response = await Retry.RetryAsync(async () => await ApiClient.SendEvent(roomId, type, txnId, ev));
 
@@ -192,12 +194,17 @@ public class MatrixClient {
 
 	/// <summary> Send a <c>m.room.message</c> event to a room. </summary>
 	/// <returns> The <c>event_id</c> of the sent message </returns>
-	public async Task<string> SendMessage<TMessage>(string roomId, TMessage message) where TMessage : Api.Message => await SendEvent(roomId, "m.room.message", message);
+	public async Task<Api.EventID> SendMessage<TMessage>(Api.RoomID roomId, TMessage message) where TMessage : Api.Message => await SendEvent(roomId, "m.room.message", message);
 
 	/// <summary> Send a basic <c>m.text</c> message to a room. </summary>
 	/// <returns> The <c>event_id</c> of the sent message </returns>
-	public async Task<string> SendTextMessage(string roomId, string body) => await SendMessage(roomId, new Api.TextMessage(body));
+	public async Task<Api.EventID> SendTextMessage(Api.RoomID roomId, string body) => await SendMessage(roomId, new Api.TextMessage(body));
 
+	/// <summary> Resolves state using the provided events and a
+	/// starting state dicitonary. Each event gets the relevant state
+	/// dictionary attached to it. </summary>
+	/// <returns> A tuple with the resolved events and the state dictionary
+	/// representing the state at the end of the event list </returns>
 	public static (EventWithState[] events, StateDict state) Resolve(IEnumerable<Api.Event> events, StateDict? stateDict = null, bool rewind = false) {
 		if (stateDict is null) stateDict = StateDict.Empty;
 		List<EventWithState> list = new();
@@ -222,24 +229,15 @@ public class MatrixClient {
 		return (list.ToArray(), stateDict);
 	}
 
-	public StateDict? PresenceState { get; private set; }
-
-	public Dictionary<string, StateDict> InvitiedState { get; private set; } = new();
-	public Dictionary<string, StateDict> KnockState { get; private set; } = new();
-	public Dictionary<string, JoinedRoom> JoinedRooms { get; private set; } = new();
-	public Dictionary<string, LeftRoom> LeftRooms { get; private set; } = new();
-
-	public string? NextBatch { get; private set; }
-
-	public Dictionary<string, ITimelineEvent> EventsById { get; private set; } = new();
-
+	/// <summary> Removes any previous mentions of an event and adds it
+	/// to the <see cref="EventsById"/> dictionary. </summary>
 	internal void Deduplicate(TimelineEvent e) {
 		if (e.Value.Event.event_id is null) return;
-		if (EventsById.TryGetValue(e.Value.Event.event_id, out var conflict)) {
+		if (EventsById.TryGetValue(e.Value.Event.event_id.Value, out var conflict)) {
 			((TimelineEvent)conflict).RemoveSelf();
 			Console.WriteLine($"Removed event with conflicting ID: {conflict}");
 		}
-		EventsById[e.Value.Event.event_id] = e;
+		EventsById[e.Value.Event.event_id.Value] = e;
 	}
 
 	private async Task SyncUnsafe(int timeout) {
@@ -270,7 +268,7 @@ public class MatrixClient {
 				}
 			if (response.rooms.join is not null)
 				foreach (var joinedRoom in response.rooms.join) {
-					string id = joinedRoom.Key;
+					Api.RoomID id = joinedRoom.Key;
 					var roomResponse = joinedRoom.Value;
 					JoinedRoom? room = null;
 					JoinedRooms.TryGetValue(id, out room);
@@ -299,7 +297,7 @@ public class MatrixClient {
 				}
 			if (response.rooms.leave is not null)
 				foreach (var leftRoom in response.rooms.leave) {
-					string id = leftRoom.Key;
+					Api.RoomID id = leftRoom.Key;
 					var roomResponse = leftRoom.Value;
 					LeftRoom? room = null;
 					LeftRooms.TryGetValue(id, out room);
@@ -320,10 +318,13 @@ public class MatrixClient {
 
 	}
 
-	private bool Syncing = false;
-	private bool Filling = false;
-	private object SyncLock = new();
-
+	/// <summary> Perform a synchronisation operation with the API.
+	/// This updates all the internal data structures with the latest
+	/// information from the API. </summary>
+	/// <param name="timeout"> In milliseconds, when a timeout parameter
+	/// is supplied, the server will wait for <paramref name="timeout"/>
+	/// milliseconds before replying, returning early if an event arrives.
+	/// </param>
 	public async Task Sync(int timeout = 0) {
 		lock (SyncLock) {
 			while (Filling) Monitor.Wait(SyncLock);
@@ -358,6 +359,15 @@ public class MatrixClient {
 		}
 	}
 
+	/// <summary> Redact an event by ID. </summary>
+	public async Task<Api.EventID> Redact(Api.RoomID roomId, Api.EventID eventId, string? reason = null) {
+		var txnId = GenerateTransactionId();
+		var response = await Retry.RetryAsync(async () => await ApiClient.Redact(eventId, roomId, txnId, new Api.RedactRequest(reason)));
+
+		return response.event_id;
+
+	}
+
 	internal void RedactEvent(Api.ClientEvent redactionEvent) {
 		if (redactionEvent.content is not Api.Redaction redaction) throw new ArgumentException("Argument is not a redaction event");
 		if (EventsById.TryGetValue(redaction.redacts, out var point)) {
@@ -369,13 +379,33 @@ public class MatrixClient {
 		}
 	}
 
+	/// <summary> Exception factory used by the <see cref="ApiClient"/>. </summary>
+	private async Task<Exception?> ExceptionFactory(HttpResponseMessage response) {
+		if (response.IsSuccessStatusCode) return null;
 
-	public async Task<string> Redact(string roomId, string eventId, string? reason = null) {
-		var txnId = GenerateTransactionId();
-		var response = await Retry.RetryAsync(async () => await ApiClient.Redact(eventId, roomId, txnId, new Api.RedactRequest(reason)));
+		var errorResponse = JsonSerializer.Deserialize<Api.ErrorResponse>(await response.Content.ReadAsStringAsync());
+		if (errorResponse is not null) {
+			if (errorResponse.errcode == "M_UNKNOWN_TOKEN") {
+				if (errorResponse.soft_logout is not null && errorResponse.soft_logout!.Value) {
+					await Refresh();
+					return new Retry.RetryException();
+				} else {
+					AccessToken = null;
+					RefreshToken = null;
+					ExpiresAt = null;
+					return new LoginRequiredException();
+				}
+			}
 
-		return response.event_id;
+			return new MatrixApiError(errorResponse.errcode, errorResponse.error, response, null);
+		}
 
+		return await ApiException.Create(
+			response.RequestMessage!,
+			response.RequestMessage!.Method,
+			response,
+			RefitSettings
+		);
 	}
 
 }

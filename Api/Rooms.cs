@@ -30,9 +30,9 @@ public record KnockedRoom(KnockState knock_state);
 public record LeftRoom(AccountData account_data, State state, Timeline timeline);
 
 public record Rooms(
-	Dictionary<string, InvitedRoom>? invite,
-	Dictionary<string, JoinedRoom>? join,
-	Dictionary<string, KnockedRoom>? knock,
-	Dictionary<string, LeftRoom>? leave
+	Dictionary<RoomID, InvitedRoom>? invite,
+	Dictionary<RoomID, JoinedRoom>? join,
+	Dictionary<RoomID, KnockedRoom>? knock,
+	Dictionary<RoomID, LeftRoom>? leave
 );
 

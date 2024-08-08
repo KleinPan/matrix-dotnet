@@ -4,7 +4,7 @@ namespace matrix_dotnet.Api;
 [JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
 [JsonPropertyDerivedType(typeof(Redaction), typeDiscriminator: "m.room.redaction")]
 [JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
-public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, string? event_id) {
+public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, EventID? event_id) {
 	public bool IsState { get { return state_key is not null; } }
 };
 
@@ -19,9 +19,9 @@ public record StrippedStateEvent(
 public record ClientEvent(
 	[JsonPropertyTargetProperty]
 	EventContent? content,
-	string event_id,
+	EventID? event_id,
 	long origin_server_ts,
-	string? room_id,
+	RoomID? room_id,
 	string sender,
 	string? state_key,
 	[JsonPropertyRecursive]
@@ -34,7 +34,7 @@ public record ClientEvent(
 public record ClientEventWithoutRoomID(
 	[JsonPropertyTargetProperty]
 	EventContent? content,
-	string event_id,
+	EventID? event_id,
 	long origin_server_ts,
 	string sender,
 	string? state_key,

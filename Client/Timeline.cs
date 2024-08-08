@@ -53,9 +53,9 @@ internal class TimelineEvent : ITimelineEvent {
 	private void CheckOrphan() {
 		if (Node.List is null) {
 			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
-			string? event_id = Node.Value.Event.Event.event_id;
+			Api.EventID? event_id = Node.Value.Event.Event.event_id;
 			if (event_id is null) throw new ArgumentNullException("Orphaned node has no event_id");
-			Node = ((TimelineEvent)Timeline.Client.EventsById[event_id]).Node;
+			Node = ((TimelineEvent)Timeline.Client.EventsById[event_id.Value]).Node;
 			if (Node.Value.Event is null) throw new ArgumentNullException("TimelineEvent instantiated with hole node");
 		}
 	}
@@ -198,7 +198,7 @@ public class Timeline {
 	private LinkedList<TimelinePoint> EventList = new();
 
 	internal MatrixClient Client { get; private set; }
-	internal string RoomId { get; private set; }
+	internal Api.RoomID RoomId { get; private set; }
 
 	public ITimelineEvent? First {
 		get {
@@ -244,7 +244,7 @@ public class Timeline {
 	}
 
 
-	public Timeline(MatrixClient client, string roomId) {
+	public Timeline(MatrixClient client, Api.RoomID roomId) {
 		Client = client;
 		RoomId = roomId;
 	}

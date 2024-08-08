@@ -6,7 +6,7 @@ using Refit;
 public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
 
 /// <summary><see cref="GetJoinedRooms"/></summary>
-public record JoinedRoomsResponse(string[] joined_rooms);
+public record JoinedRoomsResponse(Api.RoomID[] joined_rooms);
 
 /// <summary><see cref="Refresh"/></summary>
 public record RefreshRequest(string refresh_token);
@@ -65,7 +65,7 @@ public interface IMatrixApi {
 	/// <param name="body">See <see cref="EventContent"/></param>
 	[Put("/_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}")]
 	[Headers("Authorization: Bearer")]
-	public Task<SendEventResponse> SendEvent<TEvent>(string roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
+	public Task<SendEventResponse> SendEvent<TEvent>(RoomID roomId, string eventType, string txnId, TEvent body) where TEvent : EventContent;
 
 	/// <summary> Sync events. See <see href="https://spec.matrix.org/v1.11/client-server-api/#syncing"/></summary>
 	[Get("/_matrix/client/v3/sync")]
@@ -82,7 +82,7 @@ public interface IMatrixApi {
 	[Get("/_matrix/client/v3/rooms/{roomId}/messages")]
 	[Headers("Authorization: Bearer")]
 	public Task<RoomMessagesResponse> GetRoomMessages(
-		string roomId,
+		RoomID roomId,
 		Dir dir,
 		string? filter = null,
 		string? from = null,
@@ -99,7 +99,7 @@ public interface IMatrixApi {
 
 	[Put("/_matrix/client/v3/rooms/{roomId}/redact/{eventId}/{txnId}")]
 	[Headers("Authorization: Bearer")]
-	public Task<RedactResponse> Redact(string eventId, string roomId, string txnId, RedactRequest? request);
+	public Task<RedactResponse> Redact(EventID eventId, RoomID roomId, string txnId, RedactRequest? request);
 }
 
 
