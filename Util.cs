@@ -18,6 +18,16 @@ class Retry {
 			goto retry;
 		}
 	}
+
+	public static async Task RetryAsync(Func<Task> func) {
+	retry:
+		try {
+			await func();
+			return;
+		} catch (RetryException) {
+			goto retry;
+		}
+	}
 }
 
 

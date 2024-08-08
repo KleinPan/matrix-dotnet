@@ -1,13 +1,5 @@
 namespace matrix_dotnet.Api;
 
-[JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
-[JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
-[JsonPropertyDerivedType(typeof(Redaction), typeDiscriminator: "m.room.redaction")]
-[JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
-public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, EventID? event_id) {
-	public bool IsState { get { return state_key is not null; } }
-};
-
 public record StrippedStateEvent(
 	[JsonPropertyTargetProperty]
 	EventContent? content, // Redacted events have no content

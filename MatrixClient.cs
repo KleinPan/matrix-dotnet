@@ -117,8 +117,9 @@ public class MatrixClient {
 					new MXCConverter(), // It is a bummer that C# doesn't have an interface for loading structs from strings
 					new EventIDConverter(),
 					new RoomIDConverter(),
-					new JsonStringEnumConverter()
-				}
+					new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower)
+				},
+				DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 			})
 		};
 
@@ -379,6 +380,71 @@ public class MatrixClient {
 				orig_event.State
 			);
 		}
+	}
+	
+
+	/// <summary> Create a new room. See <see href="https://spec.matrix.org/latest/client-server-api/#post_matrixclientv3createroom"/>
+	/// for explanation of the many parameters. </summary>
+	public async Task<Api.RoomID> CreateRoom(
+		string? type = null,
+		string? room_version = null,
+		bool? federate = null,
+		string[]? invite = null,
+		bool? is_direct = null,
+		string? name = null,
+		Api.RoomCreationStateEvent[]? initial_state = null,
+		Api.PowerLevels? power_level_content_override = null,
+		Api.RoomPreset? preset = null,
+		string? room_alias_name = null,
+		string? topic = null,
+		Api.RoomVisibility? visibility = null,
+		Api.EventID? predecessor_event_id = null,
+		Api.RoomID? predecessor_room_id = null
+	) {
+		var response = await Retry.RetryAsync(async () => await ApiClient.CreateRoom(new Api.RoomCreationRequest(
+			creation_content: new Api.RoomCreation(
+				creator: null,
+				predecessor: predecessor_room_id is not null && predecessor_event_id is not null ? new Api.PreviousRoom(predecessor_event_id.Value, predecessor_room_id.Value) : null,
+				type: type,
+				room_version: room_version,
+				federate: federate
+			),
+			initial_state: initial_state,
+			invite: invite,
+			is_direct: is_direct,
+			name: name,
+			power_level_content_override: power_level_content_override,
+			preset: preset,
+			room_alias_name: room_alias_name,
+			room_version: room_version,
+			topic: topic,
+			visibility: visibility
+		)));
+
+		return response.room_id;
+
+	}
+
+	/// <summary> Invite user to a room </summary>
+	public async Task InviteUser(Api.RoomID roomId, string userId, string? reason = null) {
+		await Retry.RetryAsync(async () => await ApiClient.Invite(roomId, new Api.InviteRequest(userId, reason)));
+	}
+
+	/// <summary> Join a room </summary>
+	public async Task<Api.RoomID> JoinRoom(Api.RoomID roomId, string? reason = null, string[]? server_name = null)
+		=> await JoinRoom(roomId.ToString(), reason, server_name);
+
+	/// <summary> Join a room </summary>
+	public async Task<Api.RoomID> JoinRoom(string roomIdOrAlias, string? reason = null, string[]? server_name = null) {
+		var response = await Retry.RetryAsync(async () => await ApiClient.Join(roomIdOrAlias, new Api.JoinRequest(reason), server_name));
+
+		InvitiedState.Remove(response.room_id);
+		return response.room_id;
+	}
+
+	/// <summary> Leave a room </summary>
+	public async Task LeaveRoom(Api.RoomID roomId, string? reason = null) {
+		await Retry.RetryAsync(async () => await ApiClient.Leave(roomId, new Api.LeaveRequest(reason)));
 	}
 
 	/// <summary> Exception factory used by the <see cref="ApiClient"/>. </summary>

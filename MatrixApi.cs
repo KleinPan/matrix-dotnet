@@ -100,6 +100,28 @@ public interface IMatrixApi {
 	[Put("/_matrix/client/v3/rooms/{roomId}/redact/{eventId}/{txnId}")]
 	[Headers("Authorization: Bearer")]
 	public Task<RedactResponse> Redact(EventID eventId, RoomID roomId, string txnId, RedactRequest? request);
+
+	[Post("/_matrix/client/v3/createRoom")]
+	[Headers("Authorization: Bearer")]
+	public Task<RoomCreationResponse> CreateRoom(RoomCreationRequest request);
+
+	[Post("/_matrix/client/v3/rooms/{roomId}/invite")]
+	[Headers("Authorization: Bearer")]
+	public Task Invite(RoomID roomID, InviteRequest request);
+
+	[Post("/_matrix/client/v3/join/{roomIdOrAlias}")]
+	[Headers("Authorization: Bearer")]
+	public Task<JoinResponse> Join(string roomIdOrAlias, [Body] JoinRequest request, string[]? server_name = null);
+	
+	public async Task<JoinResponse> Join(RoomID roomId, JoinRequest request, string[]? server_name = null) {
+		return await Join(roomId.ToString(), request, server_name);
+	}
+
+	[Post("/_matrix/client/v3/rooms/{roomId}/leave")]
+	[Headers("Authorization: Bearer")]
+	public Task Leave(RoomID roomId, LeaveRequest request);
+
+
 }
 
 

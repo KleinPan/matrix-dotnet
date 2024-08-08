@@ -1,9 +1,18 @@
+using System.Text.Json.Serialization;
+
 namespace matrix_dotnet.Api;
+
+/// <summary><see cref="IMatrixApi.SendEvent"/></summary>
+public record SendEventResponse(EventID event_id);
+public record RedactResponse(EventID event_id);
 
 [JsonPropertyPolymorphic(typeof(EventContent), TypeDiscriminatorPropertyName = "type", DefaultType = typeof(UnknownEventContent))]
 [JsonPropertyDerivedType(typeof(Message), typeDiscriminator: "m.room.message")]
 [JsonPropertyDerivedType(typeof(Redaction), typeDiscriminator: "m.room.redaction")]
 [JsonPropertyDerivedType(typeof(RoomMember), typeDiscriminator: "m.room.member")]
+[JsonPropertyDerivedType(typeof(CanonicalAlias), typeDiscriminator: "m.room.canonical_alias")]
+[JsonPropertyDerivedType(typeof(RoomCreation), typeDiscriminator: "m.room.create")]
+[JsonPropertyDerivedType(typeof(JoinRules), typeDiscriminator: "m.room.join_rules")]
 public record Event([JsonPropertyTargetProperty] EventContent? content, string type, string? state_key, string? sender, EventID? event_id) {
 	public bool IsState { get { return state_key is not null; } }
 };
@@ -11,11 +20,6 @@ public record Event([JsonPropertyTargetProperty] EventContent? content, string t
 /// <summary>Represents a room event content</summary>
 public abstract record EventContent() { };
 public record UnknownEventContent() : EventContent() { };
-public record Redaction(EventID redacts, string? reason = null) : EventContent();
-
-/// <summary><see cref="IMatrixApi.SendEvent"/></summary>
-public record SendEventResponse(EventID event_id);
-public record RedactResponse(EventID event_id);
 
 /// <summary> Represents any <c>m.room.message</c> event. </summary>
 [JsonNonFirstPolymorphic(TypeDiscriminatorPropertyName = "msgtype", DefaultType = typeof(UnknownMessage))]

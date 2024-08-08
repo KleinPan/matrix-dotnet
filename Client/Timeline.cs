@@ -157,12 +157,24 @@ internal class TimelineEvent : ITimelineEvent {
 		return null;
 	}
 };
+
+/// <summary> The linked list node in a <see cref="Timeline"/> </summary>
 public interface ITimelineEvent {
 	public EventWithState Value { get; }
+	/// <summary> Get the next event in the list. Automatically
+	/// fetches new events when applicable. </summary>
 	public Task<ITimelineEvent?> Next();
+	/// <summary> Get the previous event in the list. Automatically
+	/// fetches new events when applicable. </summary>
 	public Task<ITimelineEvent?> Previous();
+	/// <summary> Get the next event in the list. Only gives
+	/// already cached events. </summary>
 	public ITimelineEvent? NextOffline();
+	/// <summary> Get the previous event in the list. Only gives
+	/// already cached events. </summary>
 	public ITimelineEvent? PreviousOffline();
+	/// <summary> Get an enumerable starting with this event going forward.
+	/// Automatically fetches new events when applicable.</summary>
 	public async IAsyncEnumerable<ITimelineEvent> EnumerateForward() {
 		ITimelineEvent? current = this;
 		do {
@@ -170,6 +182,8 @@ public interface ITimelineEvent {
 			current = await current.Next();
 		} while (current is not null);
 	}
+	/// <summary> Get an enumerable starting with this event going backward.
+	/// Automatically fetches new events when applicable.</summary>
 	public async IAsyncEnumerable<ITimelineEvent> EnumerateBackward() {
 		ITimelineEvent? current = this;
 		do {
@@ -177,6 +191,8 @@ public interface ITimelineEvent {
 			current = await current.Previous();
 		} while (current is not null);
 	}
+	/// <summary> Get an enumerable starting with this event going forward.
+	/// Only gives already cached events. </summary>
 	public IEnumerable<ITimelineEvent> EnumerateForwardOffline() {
 		ITimelineEvent? current = this;
 		do {
@@ -184,6 +200,8 @@ public interface ITimelineEvent {
 			current = current.NextOffline();
 		} while (current is not null);
 	}
+	/// <summary> Get an enumerable starting with this event going backward.
+	/// Only gives already cached events. </summary>
 	public IEnumerable<ITimelineEvent> EnumerateBackwardOffline() {
 		ITimelineEvent? current = this;
 		do {
@@ -193,13 +211,15 @@ public interface ITimelineEvent {
 	}
 }
 
+/// <summary> Represents the history of a joined room in a linked list. </summary>
 public class Timeline {
-	// TODO: lock linked list
 	private LinkedList<TimelinePoint> EventList = new();
 
 	internal MatrixClient Client { get; private set; }
 	internal Api.RoomID RoomId { get; private set; }
 
+	/// <summary> Get the first cached event in this timeline.
+	/// To get earlier events from the server, use <see cref="ITimelineEvent.Previous"/> </summary>
 	public ITimelineEvent? First {
 		get {
 			LinkedListNode<TimelinePoint>? node = EventList.First;
@@ -212,6 +232,9 @@ public class Timeline {
 		}
 	}
 
+	/// <summary> Get the last cached event in this timeline.
+	/// To get later events from the server, use <see cref="ITimelineEvent.Next"/>
+	/// or more often <see cref="Client.MatrixClient.Sync"/> </summary>
 	public ITimelineEvent? Last {
 		get {
 			LinkedListNode<TimelinePoint>? node = EventList.Last;
@@ -224,7 +247,7 @@ public class Timeline {
 		}
 	}
 
-	public void Sync(Api.Timeline timeline, StateDict? state, string prev_batch, string? original_batch) {
+	internal void Sync(Api.Timeline timeline, StateDict? state, string prev_batch, string? original_batch) {
 		if (prev_batch != original_batch) {
 			EventList.AddLast(new TimelinePoint(null, original_batch, prev_batch));
 		}
@@ -244,7 +267,7 @@ public class Timeline {
 	}
 
 
-	public Timeline(MatrixClient client, Api.RoomID roomId) {
+	internal Timeline(MatrixClient client, Api.RoomID roomId) {
 		Client = client;
 		RoomId = roomId;
 	}

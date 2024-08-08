@@ -154,3 +154,7 @@ functionality can be added just by adding more event types. If you need anything
 not-yet supported, feel free to add it to the `Api/EventContent.cs` file. I'll
 be glad to help with any contributions so even unfinished pull requests are very
 welcome.
+
+## Known issues, missing features
+
+- event relationships and all related APIs are not implemented
