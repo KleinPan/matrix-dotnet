@@ -5,12 +5,12 @@ using Refit;
 
 public record ErrorResponse(string errcode, string error, bool? soft_logout = null);
 
-/// <summary><see cref="GetJoinedRooms"/></summary>
+/// <summary><see cref="IMatrixApi.GetJoinedRooms"/></summary>
 public record JoinedRoomsResponse(Api.RoomID[] joined_rooms);
 
-/// <summary><see cref="Refresh"/></summary>
+/// <summary><see cref="IMatrixApi.Refresh"/></summary>
 public record RefreshRequest(string refresh_token);
-/// <summary><see cref="Refresh"/></summary>
+/// <summary><see cref="IMatrixApi.Refresh"/></summary>
 public record RefreshResponse(string access_token, int? expires_in_ms, string? refresh_token);
 
 
