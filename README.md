@@ -33,7 +33,7 @@ You start by initializing the MatrixClient:
 ```cs
 using matrix_dotnet.Client;
 
-var client = new MatrixClient("https://matrix.io");
+var client = new MatrixClient("https://example.com");
 await client.PasswordLogin(Secrets.username, Secrets.password, initialDeviceDisplayName: "FreeReal development");
 ```
 
