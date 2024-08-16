@@ -8,13 +8,23 @@ with tabs.
 
 ## Installation
 
-NuGet coming soon™, for the time being we recommend using a git submodule:
+### NuGet
+
+There is a NuGet package you can install by with `dotnet`:
+
+```shell
+dotnet add package matrix_csharp
+```
+
+### Submodule
+
+You can also add this library as a git submodule:
 
 ```shell
 git submodule add https://gitlab.com/Greenscreener/matrix-dotnet
 ```
 
-and then adding a reference to your `csproj` file:
+and then add a reference to your `csproj` file:
 
 ```shell
 dotnet add reference ../matrix-dotnet/matrix-dotnet.csproj
